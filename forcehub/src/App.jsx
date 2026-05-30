@@ -216,11 +216,11 @@ function MenuScreen({ user, onNavigate, onLogout }) {
 function PanoramaScreen({ onBack }) {
   const TD_KEY = "b7da33a073ea44d3b81cd24c38957647";
 
-  // Twelve Data tickers
-  const ASSETS = {
-    WIN:  { symbol: "WIN1!",  exchange: "BVMF", label: "Mini Índice" },
-    WDO:  { symbol: "WDO1!",  exchange: "BVMF", label: "Mini Dólar"  },
-    IBOV: { symbol: "IBOV",   exchange: "BVMF", label: "Ibovespa"    },
+  // Twelve Data tickers — tenta múltiplos símbolos até encontrar o correto
+  const ASSET_CANDIDATES = {
+    WIN:  { candidates: ["WINM26","WIN1!","WINN26","WIN"], exchange: "BVMF", label: "Mini Índice" },
+    WDO:  { candidates: ["WDON26","WDO1!","WDOM26","WDOK26","WDO"], exchange: "BVMF", label: "Mini Dólar"  },
+    IBOV: { candidates: ["IBOV","^BVSP","IBOV11","BVSP"], exchange: "BVMF", label: "Ibovespa"    },
   };
 
   const [data,    setData]    = useState(null);
@@ -244,14 +244,22 @@ function PanoramaScreen({ onBack }) {
     try {
       const results = {};
       // Busca paralela para os 3 ativos
-      await Promise.all(Object.entries(ASSETS).map(async ([ticker, meta]) => {
-        const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(meta.symbol)}&exchange=${meta.exchange}&interval=1day&outputsize=7&apikey=${TD_KEY}&dp=2`;
-        const res = await fetch(url, { headers: { "Accept": "application/json" } });
-        if (!res.ok) throw new Error(`Erro HTTP ${res.status} (${ticker})`);
-        const json = await res.json();
-        if (json.status === "error") throw new Error(`${ticker}: ${json.message}`);
-        if (!json.values?.length) throw new Error(`${ticker}: sem dados retornados`);
-        // Pega últimos 5 pregões em ordem cronológica (mais antigo→mais recente)
+      await Promise.all(Object.entries(ASSET_CANDIDATES).map(async ([ticker, meta]) => {
+        let json = null;
+        let lastError = "";
+        // Tenta cada símbolo candidato até um funcionar
+        for (const sym of meta.candidates) {
+          try {
+            const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=7&apikey=${TD_KEY}&dp=2`;
+            const res = await fetch(url, { headers: { "Accept": "application/json" } });
+            if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
+            const j = await res.json();
+            if (j.status === "error" || !j.values?.length) { lastError = j.message || "sem dados"; continue; }
+            json = j;
+            break;
+          } catch(e) { lastError = e.message; continue; }
+        }
+        if (!json) throw new Error(`${ticker}: não encontrado (${lastError})`);
         const values = [...(json.values || [])].slice(0, 5).reverse();
         results[ticker] = values.map(v => {
           const hi  = parseFloat(v.high);
