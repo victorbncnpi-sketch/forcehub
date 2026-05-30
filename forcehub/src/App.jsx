@@ -243,38 +243,39 @@ function PanoramaScreen({ onBack }) {
     setLoading(true); setError(null);
     try {
       const results = {};
-      // Busca paralela para os 3 ativos
-      await Promise.all(Object.entries(ASSET_CANDIDATES).map(async ([ticker, meta]) => {
-        let json = null;
-        let lastError = "";
-        // Tenta cada símbolo candidato até um funcionar
-        for (const sym of meta.candidates) {
-          try {
-            const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=7&apikey=${TD_KEY}&dp=2`;
-            const res = await fetch(url, { headers: { "Accept": "application/json" } });
-            if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
-            const j = await res.json();
-            if (j.status === "error" || !j.values?.length) { lastError = j.message || "sem dados"; continue; }
-            json = j;
-            break;
-          } catch(e) { lastError = e.message; continue; }
-        }
-        if (!json) throw new Error(`${ticker}: não encontrado (${lastError})`);
-        const values = [...(json.values || [])].slice(0, 5).reverse();
-        results[ticker] = values.map(v => {
+      // Busca sequencial com delay para respeitar limite de 8 req/min do plano free
+      const TICKERS_CONFIG = [
+        { key: "WIN",  symbol: "WINM26", label: "Mini Índice" },
+        { key: "WDO",  symbol: "WDON26", label: "Mini Dólar"  },
+        { key: "IBOV", symbol: "IBOV",   label: "Ibovespa"    },
+      ];
+
+      for (let i = 0; i < TICKERS_CONFIG.length; i++) {
+        const { key, symbol, label } = TICKERS_CONFIG[i];
+        // Delay entre chamadas para não estourar rate limit
+        if (i > 0) await new Promise(r => setTimeout(r, 1500));
+
+        const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&outputsize=7&apikey=${TD_KEY}&dp=2`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`${key}: HTTP ${res.status}`);
+        const json = await res.json();
+        if (json.status === "error") throw new Error(`${key}: ${json.message}`);
+        if (!json.values?.length) throw new Error(`${key}: sem dados`);
+
+        const values = [...json.values].slice(0, 5).reverse();
+        results[key] = values.map(v => {
           const hi  = parseFloat(v.high);
           const lo  = parseFloat(v.low);
-          const amp = parseFloat((hi - lo).toFixed(ticker === "WDO" ? 1 : 0));
+          const amp = parseFloat((hi - lo).toFixed(key === "WDO" ? 1 : 0));
           return {
             date:    v.datetime,
             weekday: new Date(v.datetime + "T12:00:00-03:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".",""),
-            high:  hi,
-            low:   lo,
+            high:  hi, low:  lo,
             close: parseFloat(v.close),
             amp,
           };
         });
-      }));
+      }
       setData(results);
     } catch(e) {
       setError(e.message);
