@@ -1,6 +1,22 @@
 import { useState, useEffect, useRef } from "react";
 
-const USERS = [{ user: "victor", pass: "forcehub2026" }, { user: "cliente1", pass: "xp2026" }];
+// ─── USUÁRIOS — adicione clientes aqui ───────────────────────────────────────
+// role: "admin" = acesso total | "client" = só visualiza carteira publicada
+// expiry: "YYYY-MM-DD" — acesso expira nessa data
+const USERS = [
+  { user: "victor",    pass: "forcehub2026", role: "admin",  expiry: null,         name: "Victor Noronha" },
+  { user: "cliente1",  pass: "xp2026c1",     role: "client", expiry: "2027-06-01", name: "Cliente 1" },
+  { user: "cliente2",  pass: "xp2026c2",     role: "client", expiry: "2027-06-01", name: "Cliente 2" },
+  // Adicione novos clientes abaixo:
+  // { user: "nome.sobrenome", pass: "senha123", role: "client", expiry: "2027-06-01", name: "Nome Completo" },
+  { user: "andre.gain",    pass: "xp2026ag",     role: "client", expiry: "2027-06-01", name: "Andre Gain" },
+  { user: "maria.emilia",  pass: "xp2026me",     role: "client", expiry: "2027-06-01", name: "Maria Emilia" },
+];
+
+function checkExpiry(user) {
+  if (!user.expiry) return true; // admin sem expiração
+  return new Date(user.expiry) >= new Date();
+}
 
 async function claudeSearch(prompt) {
   let messages = [{ role: "user", content: prompt }];
@@ -30,8 +46,9 @@ function LoginScreen({ onLogin }) {
     setLoading(true); setError("");
     setTimeout(() => {
       const found = USERS.find(u => u.user === user.trim().toLowerCase() && u.pass === pass);
-      if (found) onLogin(found.user);
-      else { setError("Usuário ou senha incorretos."); setLoading(false); }
+      if (!found) { setError("Usuário ou senha incorretos."); setLoading(false); return; }
+      if (!checkExpiry(found)) { setError("Acesso expirado. Entre em contato com Victor Noronha."); setLoading(false); return; }
+      onLogin({ user: found.user, role: found.role, name: found.name, expiry: found.expiry });
     }, 600);
   };
   const inp = { width: "100%", boxSizing: "border-box", background: "#111", border: "1px solid #333", borderRadius: 4, padding: "14px 16px", color: "#fff", fontSize: 18, fontFamily: "monospace", outline: "none" };
@@ -68,7 +85,11 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function MenuScreen({ user, onNavigate, onLogout }) {
+function MenuScreen({ session, onNavigate, onLogout }) {
+  const user = session?.user;
+  const name = session?.name || user;
+  const isAdmin = session?.role === "admin";
+  const expiry = session?.expiry;
   const [time, setTime] = useState(new Date());
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
   const Card = ({ icon, title, desc, nav }) => (
@@ -95,7 +116,11 @@ function MenuScreen({ user, onNavigate, onLogout }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <span style={{ fontSize: 14, color: "#555" }}>{time.toLocaleTimeString("pt-BR")}</span>
-          <span style={{ fontSize: 14, color: "#444" }}>Olá, <span style={{ color: "#fbbf24" }}>{user}</span></span>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+            <span style={{ fontSize: 14, color: "#444" }}>Olá, <span style={{ color: "#fbbf24" }}>{name}</span></span>
+            {!isAdmin && expiry && <span style={{ fontSize: 11, color: "#555" }}>Acesso até {new Date(expiry).toLocaleDateString("pt-BR")}</span>}
+            {isAdmin && <span style={{ fontSize: 11, color: "#fbbf24" }}>● ADMIN</span>}
+          </div>
           <button onClick={onLogout} style={{ background: "none", border: "1px solid #222", color: "#555", padding: "5px 12px", borderRadius: 3, cursor: "pointer", fontSize: 13, fontFamily: "monospace" }}>SAIR</button>
         </div>
       </div>
@@ -124,36 +149,7 @@ function PanoramaScreen({ onBack }) {
   const LABELS = { WIN: "Mini Índice", WDO: "Mini Dólar", IBOV: "Ibovespa" };
   const empty = () => DAYS.map(d => ({ weekday: d, high: "", low: "" }));
   const [rows, setRows] = useState({ WIN: empty(), WDO: empty(), IBOV: empty() });
-  const [dbStatus, setDbStatus] = useState("");
   const [news, setNews] = useState(null);
-
-  useEffect(() => {
-    // Carrega dados automáticos do banco ao abrir
-    const loadDB = async () => {
-      try {
-        const res = await fetch("/api/market-data?days=5");
-        if (!res.ok) return;
-        const json = await res.json();
-        if (!json.ok || !json.data) return;
-        const dayMap = { 1:"Seg", 2:"Ter", 3:"Qua", 4:"Qui", 5:"Sex" };
-        const newRows = { WIN: empty(), WDO: empty(), IBOV: empty() };
-        for (const ticker of ["WIN","WDO","IBOV"]) {
-          (json.data[ticker] || []).forEach(entry => {
-            const dow = new Date(entry.date + "T12:00:00").getDay();
-            const idx = dow - 1;
-            if (idx >= 0 && idx <= 4 && entry.high && entry.low) {
-              newRows[ticker][idx] = { weekday: dayMap[dow], high: String(entry.high), low: String(entry.low) };
-            }
-          });
-        }
-        setRows(newRows);
-        setDbStatus("✓ Dados carregados automaticamente — " + new Date().toLocaleTimeString("pt-BR"));
-      } catch(e) {
-        setDbStatus("Banco ainda vazio — preencha manualmente ou aguarde 19h");
-      }
-    };
-    loadDB();
-  }, []);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState(null);
   const [time, setTime] = useState(new Date());
@@ -201,7 +197,7 @@ function PanoramaScreen({ onBack }) {
       }
       // Limpa caracteres problemáticos antes de parsear
       const raw = text.slice(si, ei)
-        .replace(/[ -]/g, " ") // control chars
+        .replace(/[ -]/g, " ") // control chars
         .replace(/,\s*([}\]])/g, "$1");           // trailing commas
       setNews(JSON.parse(raw));
     } catch (e) { setNewsError(e.message); }
@@ -217,10 +213,7 @@ function PanoramaScreen({ onBack }) {
           <div style={{ width: 1, height: 24, background: "#222" }} />
           <span style={{ fontSize: 20, fontWeight: "bold", color: "#fbbf24", letterSpacing: 4 }}>PANORAMA DE MERCADO</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          {dbStatus && <span style={{ fontSize: 12, color: dbStatus.startsWith("✓") ? "#22c55e" : "#fbbf24" }}>{dbStatus}</span>}
-          <span style={{ fontSize: 14, color: "#444" }}>{time.toLocaleTimeString("pt-BR")}</span>
-        </div>
+        <span style={{ fontSize: 14, color: "#444" }}>{time.toLocaleTimeString("pt-BR")}</span>
       </div>
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
         {TICKERS.map(ticker => {
@@ -344,10 +337,10 @@ function PosicaoRow({ p, onFechar }) {
   );
 }
 
-function CarteiraScreen({ onBack }) {
+function CarteiraScreen({ onBack, isAdmin }) {
   const [acoes, setAcoes] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
-  const [aba, setAba] = useState("carteira");
+  const [aba, setAba] = useState(isAdmin ? "carteira" : "posicoes");
   const [showForm, setShowForm] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
@@ -428,17 +421,21 @@ function CarteiraScreen({ onBack }) {
           <span style={{ fontSize: 20, fontWeight: "bold", color: "#fbbf24", letterSpacing: 4 }}>CARTEIRA RECOMENDADA</span>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button onClick={scan} disabled={scanning} style={{ background: scanning ? "#111" : "#0a1a08", border: "1px solid " + (scanning ? "#333" : "#22c55e"), color: scanning ? "#444" : "#22c55e", padding: "8px 18px", borderRadius: 4, cursor: scanning ? "not-allowed" : "pointer", fontSize: 14, fontFamily: "monospace" }}>
-            {scanning ? "⟳ BUSCANDO..." : "🔍 BUSCAR IA"}
-          </button>
-          <button onClick={() => setShowForm(true)} style={{ background: "#1a1400", border: "1px solid #fbbf24", color: "#fbbf24", padding: "8px 18px", borderRadius: 4, cursor: "pointer", fontSize: 14, fontFamily: "monospace" }}>+ ADICIONAR</button>
+          {isAdmin && (
+            <>
+              <button onClick={scan} disabled={scanning} style={{ background: scanning ? "#111" : "#0a1a08", border: "1px solid " + (scanning ? "#333" : "#22c55e"), color: scanning ? "#444" : "#22c55e", padding: "8px 18px", borderRadius: 4, cursor: scanning ? "not-allowed" : "pointer", fontSize: 14, fontFamily: "monospace" }}>
+                {scanning ? "⟳ BUSCANDO..." : "🔍 BUSCAR IA"}
+              </button>
+              <button onClick={() => setShowForm(true)} style={{ background: "#1a1400", border: "1px solid #fbbf24", color: "#fbbf24", padding: "8px 18px", borderRadius: 4, cursor: "pointer", fontSize: 14, fontFamily: "monospace" }}>+ ADICIONAR</button>
+            </>
+          )}
           <span style={{ fontSize: 14, color: "#444" }}>{time.toLocaleTimeString("pt-BR")}</span>
         </div>
       </div>
 
       <div style={{ padding: "0 20px" }}>
         <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #1a1a00", marginTop: 16 }}>
-          {[["carteira", "📋 RECOMENDAÇÕES"], ["posicoes", "📊 POSIÇÕES (" + abertas + " abertas)"]].map(([key, label]) => (
+          {(isAdmin ? [["carteira", "📋 RECOMENDAÇÕES"], ["posicoes", "📊 POSIÇÕES (" + abertas + " abertas)"]] : [["posicoes", "📊 POSIÇÕES (" + abertas + " abertas)"]]).map(([key, label]) => (
             <button key={key} onClick={() => setAba(key)} style={{ background: aba === key ? "#1a1400" : "none", border: "none", borderBottom: aba === key ? "3px solid #fbbf24" : "3px solid transparent", color: aba === key ? "#fbbf24" : "#555", padding: "12px 24px", cursor: "pointer", fontSize: 16, fontFamily: "monospace", letterSpacing: 1 }}>{label}</button>
           ))}
         </div>
@@ -499,11 +496,13 @@ function CarteiraScreen({ onBack }) {
             {acoes.length === 0 && !scanResult && (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "50vh", gap: 18 }}>
                 <div style={{ fontSize: 52 }}>📈</div>
-                <div style={{ fontSize: 17, color: "#444" }}>NENHUMA AÇÃO NA CARTEIRA</div>
-                <div style={{ display: "flex", gap: 12 }}>
-                  <button onClick={scan} style={{ background: "#0a1a08", border: "1px solid #22c55e", color: "#22c55e", padding: "12px 24px", borderRadius: 4, cursor: "pointer", fontSize: 15, fontFamily: "monospace" }}>🔍 BUSCAR COM IA</button>
-                  <button onClick={() => setShowForm(true)} style={{ background: "#1a1400", border: "1px solid #fbbf24", color: "#fbbf24", padding: "12px 24px", borderRadius: 4, cursor: "pointer", fontSize: 15, fontFamily: "monospace" }}>+ ADICIONAR MANUALMENTE</button>
-                </div>
+                <div style={{ fontSize: 17, color: "#444" }}>NENHUMA RECOMENDAÇÃO AINDA</div>
+                {isAdmin && (
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <button onClick={scan} style={{ background: "#0a1a08", border: "1px solid #22c55e", color: "#22c55e", padding: "12px 24px", borderRadius: 4, cursor: "pointer", fontSize: 15, fontFamily: "monospace" }}>🔍 BUSCAR COM IA</button>
+                    <button onClick={() => setShowForm(true)} style={{ background: "#1a1400", border: "1px solid #fbbf24", color: "#fbbf24", padding: "12px 24px", borderRadius: 4, cursor: "pointer", fontSize: 15, fontFamily: "monospace" }}>+ ADICIONAR MANUALMENTE</button>
+                  </div>
+                )}
               </div>
             )}
             {acoes.length > 0 && (
@@ -522,7 +521,7 @@ function CarteiraScreen({ onBack }) {
                         </div>
                         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                           <span style={{ fontSize: 16, fontWeight: "bold", color: a.alvo > a.entrada ? "#22c55e" : "#ef4444" }}>{a.alvo > a.entrada ? "▲ COMPRA" : "▼ VENDA"}</span>
-                          <button onClick={() => setAcoes(p => p.filter(x => x.id !== a.id))} style={{ background: "none", border: "1px solid #222", color: "#444", cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontSize: 14, fontFamily: "monospace" }}>✕</button>
+                          {isAdmin && <button onClick={() => setAcoes(p => p.filter(x => x.id !== a.id))} style={{ background: "none", border: "1px solid #222", color: "#444", cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontSize: 14, fontFamily: "monospace" }}>✕</button>}
                         </div>
                       </div>
                       <div style={{ padding: "16px 18px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
@@ -793,14 +792,15 @@ function ConselheiroScreen({ onBack, userId }) {
 
 export default function App() {
   const [screen, setScreen] = useState("login");
-  const [user, setUser] = useState("");
+  const [session, setSession] = useState(null); // { user, role, name, expiry }
+  const isAdmin = session?.role === "admin";
   return (
     <>
-      {screen === "login" && <LoginScreen onLogin={u => { setUser(u); setScreen("menu"); }} />}
-      {screen === "menu" && <MenuScreen user={user} onNavigate={s => setScreen(s)} onLogout={() => { setUser(""); setScreen("login"); }} />}
+      {screen === "login" && <LoginScreen onLogin={s => { setSession(s); setScreen("menu"); }} />}
+      {screen === "menu" && <MenuScreen session={session} onNavigate={s => setScreen(s)} onLogout={() => { setSession(null); setScreen("login"); }} />}
       {screen === "panorama" && <PanoramaScreen onBack={() => setScreen("menu")} />}
-      {screen === "carteira" && <CarteiraScreen onBack={() => setScreen("menu")} />}
-      {screen === "conselheiro" && <ConselheiroScreen onBack={() => setScreen("menu")} userId={user} />}
+      {screen === "carteira" && <CarteiraScreen onBack={() => setScreen("menu")} isAdmin={isAdmin} />}
+      {screen === "conselheiro" && <ConselheiroScreen onBack={() => setScreen("menu")} userId={session?.user} />}
       <style>{`
         @keyframes pulse { 0%,100%{opacity:.3;transform:scale(.8)} 50%{opacity:1;transform:scale(1)} }
         * { box-sizing: border-box; }
