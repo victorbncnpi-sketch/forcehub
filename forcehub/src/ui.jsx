@@ -45,7 +45,11 @@ input, textarea { font-family: inherit; }
 .fh-side { display: flex; flex-direction: column; background: #101012; border-right: 1px solid ${T.line}; }
 .fh-main { display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
 .fh-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.fh-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; }
+.fh-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; animation: fh-fade .22s ease; }
+.fh-scroll-x { overflow-x: auto; }
+.fh-card-hover { transition: border-color .15s, transform .15s; }
+.fh-card-hover:hover { border-color: ${T.lineGold}; transform: translateY(-2px); }
+.fh-btn:focus-visible, .fh-input:focus-visible, .fh-navitem:focus-visible { outline: 2px solid ${T.gold}; outline-offset: 2px; }
 .fh-navitem { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-radius: 10px; cursor: pointer; color: ${T.mut}; border: 1px solid transparent; transition: all .15s; }
 .fh-navitem:hover { background: ${T.panel2}; color: ${T.text}; }
 .fh-navitem.active { background: ${T.goldSoft}; color: ${T.gold}; border-color: ${T.lineGold}; }
@@ -60,6 +64,9 @@ input, textarea { font-family: inherit; }
   .fh-shell { grid-template-columns: 64px 1fr; }
   .fh-nav-label, .fh-brand-text, .fh-side-detail { display: none; }
   .fh-page { padding: 16px; }
+}
+@media (max-width: 720px) {
+  .fh-diary { position: fixed !important; inset: 0; width: auto !important; z-index: 80; }
 }
 `;
 
@@ -105,8 +112,8 @@ export function Badge({ tone: t = "gold", children, style }) {
   );
 }
 
-export function Card({ children, style, ...rest }) {
-  return <div className="fh-card" style={style} {...rest}>{children}</div>;
+export function Card({ children, style, className, ...rest }) {
+  return <div className={"fh-card" + (className ? " " + className : "")} style={style} {...rest}>{children}</div>;
 }
 
 export function Field({ label, hint, children, style }) {
@@ -191,6 +198,18 @@ export function Dots() {
   return (
     <div style={{ display: "flex", gap: 6 }}>
       {[0, 1, 2].map(i => <span key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: T.gold, animation: `fh-pulse .9s ${i * 0.2}s infinite` }} />)}
+    </div>
+  );
+}
+
+export function Spinner({ size = 18 }) {
+  return <span style={{ display: "inline-block", width: size, height: size, border: "2px solid " + T.line, borderTopColor: T.gold, borderRadius: "50%", animation: "fh-spin .7s linear infinite", flexShrink: 0 }} />;
+}
+
+export function Loading({ label = "Carregando..." }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "56px 20px", color: T.mut }}>
+      <Spinner /><span style={{ fontSize: 14 }}>{label}</span>
     </div>
   );
 }

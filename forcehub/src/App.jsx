@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots } from "./ui";
+import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading } from "./ui";
 
 // ─── USUÁRIOS — adicione clientes aqui ───────────────────────────────────────
 // role: "admin" = acesso total | "client" = só visualiza carteira publicada
@@ -150,7 +150,9 @@ function Shell({ session, active, onNavigate, onLogout, children }) {
         <div style={{ padding: "18px 16px", borderBottom: "1px solid " + T.line }}><Logo size={17} /></div>
         <nav style={{ padding: 12, display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
           {NAV.map(n => (
-            <div key={n.key} className={"fh-navitem" + (active === n.key ? " active" : "")} onClick={() => onNavigate(n.key)}>
+            <div key={n.key} className={"fh-navitem" + (active === n.key ? " active" : "")} onClick={() => onNavigate(n.key)}
+              role="button" tabIndex={0} aria-current={active === n.key} title={n.label}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate(n.key); } }}>
               <span style={{ fontSize: 17 }}>{n.icon}</span>
               <span className="fh-nav-label" style={{ fontSize: 14, fontWeight: 600 }}>{n.label}</span>
             </div>
@@ -188,6 +190,7 @@ function PanoramaScreen() {
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState(null);
   const [marketLoaded, setMarketLoaded] = useState(false);
+  const [loadingMarket, setLoadingMarket] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -215,6 +218,7 @@ function PanoramaScreen() {
         });
         if (any) setMarketLoaded(true);
       } catch (e) { /* mantém entrada manual */ }
+      finally { if (active) setLoadingMarket(false); }
     })();
     return () => { active = false; };
   }, []);
@@ -261,7 +265,9 @@ function PanoramaScreen() {
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 13, color: T.mut }}>Máxima · mínima · amplitude da semana — preenchido automaticamente e editável.</div>
-        {marketLoaded ? <Badge tone="green">● DADOS DO MERCADO</Badge> : <Badge tone="mut">○ ENTRADA MANUAL</Badge>}
+        {loadingMarket
+          ? <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: T.mut }}><Spinner size={14} /> Carregando cotações...</span>
+          : marketLoaded ? <Badge tone="green">● DADOS DO MERCADO</Badge> : <Badge tone="mut">○ ENTRADA MANUAL</Badge>}
       </div>
 
       {TICKERS.map(ticker => {
@@ -325,7 +331,13 @@ function PanoramaScreen() {
         {newsError && !newsLoading && <div style={{ padding: "14px 18px" }}><Banner tone="red">{newsError}</Banner></div>}
         {!newsLoading && !newsError && !news && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: T.dim }}>Clique em "Buscar eventos" para carregar o calendário de hoje.</div>}
         {!newsLoading && news && news.news && (
-          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="fh-scroll-x" style={{ padding: 14 }}>
+            <div style={{ minWidth: 560, display: "flex", flexDirection: "column", gap: 8 }}>
+            {news.news.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "62px 40px 1fr 90px 90px 90px", gap: 10, padding: "0 14px" }}>
+                {["HORA", "PAÍS", "EVENTO", "ANTERIOR", "PREVISÃO", "ATUAL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.5, textAlign: k > 2 ? "right" : "left" }}>{h}</div>)}
+              </div>
+            )}
             {news.news.length === 0
               ? <div style={{ fontSize: 14, color: T.dim, padding: "12px 4px" }}>Nenhum evento de alto impacto hoje.</div>
               : news.news.map((n, i) => (
@@ -341,6 +353,7 @@ function PanoramaScreen() {
                   <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: n.actual ? T.green : T.dim, fontFamily: T.mono }}>{n.actual || "—"}</div>
                 </div>
               ))}
+            </div>
           </div>
         )}
       </Card>
@@ -391,6 +404,7 @@ function CarteiraScreen({ isAdmin }) {
   const [scanError, setScanError] = useState(null);
   const [form, setForm] = useState({ ticker: "", nome: "", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
   const [loadError, setLoadError] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const idRef = useRef(1);
 
   useEffect(() => {
@@ -404,6 +418,7 @@ function CarteiraScreen({ isAdmin }) {
         const ids = [...(j.recomendacoes || []), ...(j.posicoes || [])].flatMap(x => [x.id || 0, x.posId || 0]);
         idRef.current = Math.max(0, ...ids) + 1;
       } catch (e) { if (active) setLoadError(e.message); }
+      finally { if (active) setLoaded(true); }
     })();
     return () => { active = false; };
   }, []);
@@ -482,7 +497,9 @@ function CarteiraScreen({ isAdmin }) {
 
       {loadError && <Banner tone="gold">Persistência indisponível ({loadError}). Configure o banco (UPSTASH_REDIS_REST_URL/TOKEN) para salvar a carteira.</Banner>}
 
-      {aba === "carteira" && (
+      {!loaded && <Loading label="Carregando carteira..." />}
+
+      {loaded && aba === "carteira" && (
         <>
           {scanError && <Banner tone="red">{scanError}</Banner>}
           {scanResult && (
@@ -545,7 +562,7 @@ function CarteiraScreen({ isAdmin }) {
                 const pot = (((a.alvo - a.entrada) / a.entrada) * 100).toFixed(1);
                 const sp = (((a.stop - a.entrada) / a.entrada) * 100).toFixed(1);
                 return (
-                  <Card key={a.id} style={{ overflow: "hidden" }}>
+                  <Card key={a.id} className="fh-card-hover" style={{ overflow: "hidden" }}>
                     <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: T.panel2, borderBottom: "1px solid " + T.line }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <span style={{ fontSize: 19, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{a.ticker}</span>
@@ -581,7 +598,7 @@ function CarteiraScreen({ isAdmin }) {
         </>
       )}
 
-      {aba === "posicoes" && (
+      {loaded && aba === "posicoes" && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
             <Stat label="Abertas" value={abertas} tone="gold" />
@@ -593,10 +610,14 @@ function CarteiraScreen({ isAdmin }) {
             <EmptyState icon="📊" title="Nenhuma posição registrada" desc="Valide uma recomendação na aba Recomendações para abrir uma posição." />
           ) : (
             <Card style={{ overflow: "hidden" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
-                {["TICKER", "EMPRESA", "ENTRADA", "ALVO", "STOP", "SAÍDA", "RENT.%", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
+              <div className="fh-scroll-x">
+                <div style={{ minWidth: 800 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
+                    {["TICKER", "EMPRESA", "ENTRADA", "ALVO", "STOP", "SAÍDA", "RENT.%", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
+                  </div>
+                  {posicoes.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} />)}
+                </div>
               </div>
-              {posicoes.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} />)}
             </Card>
           )}
         </>
@@ -708,7 +729,7 @@ function ConselheiroScreen({ userId }) {
   };
 
   return (
-    <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+    <div className="fh-fade" style={{ flex: 1, display: "flex", minHeight: 0 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ flexShrink: 0, padding: "12px 18px", borderBottom: "1px solid " + T.line, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", gap: 18 }}>
@@ -758,9 +779,12 @@ function ConselheiroScreen({ userId }) {
       </div>
 
       {showDiario && (
-        <aside style={{ width: 320, flexShrink: 0, borderLeft: "1px solid " + T.line, background: T.bg, display: "flex", flexDirection: "column" }}>
+        <aside className="fh-diary" style={{ width: 320, flexShrink: 0, borderLeft: "1px solid " + T.line, background: T.bg, display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "16px 18px", borderBottom: "1px solid " + T.line }}>
-            <div style={{ fontSize: 14, color: T.gold, fontWeight: 700, marginBottom: 12 }}>📓 Diário do trader</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 14, color: T.gold, fontWeight: 700 }}>📓 Diário do trader</div>
+              <Button variant="ghost" size="sm" onClick={() => setShowDiario(false)} style={{ padding: "4px 10px" }}>×</Button>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {[["Hoje", totalHoje], ["Semana", totalSemana], ["Mês", totalMes]].map(([l, v]) => (
                 <div key={l} style={{ background: T.panel, borderRadius: 8, padding: 10, textAlign: "center" }}>
