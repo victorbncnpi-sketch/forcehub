@@ -51,6 +51,48 @@ async function claudeSearch(prompt) {
   return texts.map(b => b.text).join("");
 }
 
+// Extrai um objeto/array JSON de um texto da IA de forma robusta:
+// remove cercas de markdown, ancora numa chave conhecida, faz matching de chaves
+// rastreando strings (ignora chaves dentro de aspas) e limpa vírgulas finais.
+function extractJSON(text, anchors = []) {
+  if (!text) return null;
+  const t = text.replace(/```(?:json)?/gi, "");
+  let start = -1;
+  for (const a of anchors) { const i = t.indexOf(a); if (i >= 0) { start = i; break; } }
+  if (start >= 0) { while (start > 0 && t[start] !== "{" && t[start] !== "[") start--; }
+  else {
+    const cands = [t.indexOf("{"), t.indexOf("[")].filter(x => x >= 0).sort((a, b) => a - b);
+    start = cands.length ? cands[0] : -1;
+  }
+  if (start < 0) return null;
+  const open = t[start], close = open === "{" ? "}" : "]";
+  let depth = 0, end = -1, inStr = false, esc = false;
+  for (let i = start; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === open) depth++;
+    else if (c === close) { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+  if (end < 0) return null;
+  const raw = Array.from(t.slice(start, end))
+    .map(c => (c.charCodeAt(0) < 32 ? " " : c))
+    .join("")
+    .replace(/,\s*([}\]])/g, "$1");
+  try { return { value: JSON.parse(raw), raw }; } catch (e) { return null; }
+}
+
+// Faz a busca com IA e tenta extrair JSON, com 1 nova tentativa se vier inválido.
+async function aiSearchJSON(prompt, anchors, attempts = 2) {
+  let lastErr = new Error("A IA não retornou um resultado válido. Tente novamente.");
+  for (let i = 0; i < attempts; i++) {
+    const text = await claudeSearch(prompt);
+    const res = extractJSON(text, anchors);
+    if (res) return res.value;
+  }
+  throw lastErr;
+}
+
 // ─── Login ────────────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
   const [user, setUser] = useState(""); const [pass, setPass] = useState("");
@@ -206,18 +248,8 @@ function PanoramaScreen() {
     try {
       const today = new Date().toLocaleDateString("pt-BR");
       const prompt = "Hoje e " + today + ". Use web_search: calendario economico hoje brasil eua alto impacto 3 touros investing. Liste eventos de ALTO IMPACTO (3 touros) do Brasil e EUA de hoje. Responda SOMENTE JSON sem markdown: {\"date\":\"" + today + "\",\"news\":[{\"time\":\"09:30\",\"country\":\"EUA\",\"title\":\"PIB\",\"previous\":\"2.1%\",\"forecast\":\"1.8%\",\"actual\":\"\"}]}";
-      const text = await claudeSearch(prompt);
-      const idx = text.indexOf('"news"');
-      if (idx < 0) throw new Error("Calendário não encontrado");
-      let si = idx;
-      while (si > 0 && text[si] !== "{") si--;
-      let depth = 0, ei = si;
-      for (let i = si; i < text.length; i++) {
-        if (text[i] === "{") depth++;
-        else if (text[i] === "}") { depth--; if (depth === 0) { ei = i + 1; break; } }
-      }
-      const raw = Array.from(text.slice(si, ei)).map(c => (c.charCodeAt(0) < 32 ? " " : c)).join("").replace(/,\s*([}\]])/g, "$1");
-      setNews(JSON.parse(raw));
+      const data = await aiSearchJSON(prompt, ['"news"']);
+      setNews({ date: data.date || today, news: Array.isArray(data.news) ? data.news : [] });
     } catch (e) { setNewsError(e.message); }
     setNewsLoading(false);
   };
@@ -420,25 +452,9 @@ function CarteiraScreen({ isAdmin }) {
     try {
       const today = new Date().toLocaleDateString("pt-BR");
       const prompt = "Voce e analista tecnico B3 swing trade. Hoje: " + today + ". Use web_search: melhores acoes comprar B3 hoje oportunidade tecnica swing trade. RESPONDA EM PORTUGUES. Retorne APENAS JSON valido sem texto extra: {\"data\":\"" + today + "\",\"contexto\":\"resumo do mercado\",\"oportunidades\":[{\"ticker\":\"PETR4\",\"nome\":\"Petrobras PN\",\"entrada\":38.50,\"alvo\":40.50,\"stop\":37.20,\"potencial\":5.2,\"setup\":\"Rompimento\",\"racional\":\"Análise\",\"prazo\":\"2-3 dias\",\"risco\":\"Risco\"}]}";
-      const text = await claudeSearch(prompt);
-      const findJSON = (t) => {
-        for (const pat of ['"oportunidades"', '"oportunidade"', '"opportunities"']) {
-          const pi = t.indexOf(pat);
-          if (pi < 0) continue;
-          let si = pi;
-          while (si > 0 && t[si] !== "{") si--;
-          let depth = 0, ei = si;
-          for (let i = si; i < t.length; i++) {
-            if (t[i] === "{") depth++;
-            else if (t[i] === "}") { depth--; if (depth === 0) { ei = i + 1; break; } }
-          }
-          try { return JSON.parse(t.slice(si, ei)); } catch (e) {}
-        }
-        return null;
-      };
-      const parsed = findJSON(text);
-      if (!parsed) throw new Error("Nenhuma oportunidade encontrada. Tente novamente.");
+      const parsed = await aiSearchJSON(prompt, ['"oportunidades"', '"oportunidade"', '"opportunities"']);
       const ops = parsed.oportunidades || parsed.oportunidade || parsed.opportunities || [];
+      if (!ops.length) throw new Error("Nenhuma oportunidade encontrada. Tente novamente.");
       setScanResult({ data: parsed.data || today, contexto: parsed.contexto || "", oportunidades: ops });
     } catch (e) { setScanError(e.message); }
     setScanning(false);
@@ -678,10 +694,15 @@ function ConselheiroScreen({ userId }) {
         if (pref) savePerfil({ ...perfil, preferencia: pref });
       }
       const data = await callAI({ max_tokens: 1500, system: buildSys(), messages: newMsgs.map(m => ({ role: m.role, content: m.content })) });
-      const text = data.content ? data.content.map(b => b.text || "").join("") : "Erro.";
-      const jm = text.match(/\{"action":"save"[^}]+\}/);
-      if (jm) { try { const e = JSON.parse(jm[0]); saveDiario({ data: hoje, resultado: e.resultado, dificuldade: e.dificuldade, reflexao: e.reflexao }); } catch (e) {} }
-      setMsgs(m => [...m, { role: "assistant", content: text.replace(/\{"action":"save"[^}]+\}/g, "").trim() }]);
+      const text = data.content ? data.content.map(b => b.text || "").join("") : "";
+      // Detecta o JSON de salvamento de resultado (tolerante a espaços/formato).
+      const saveJson = extractJSON(text, ['"action"']);
+      if (saveJson && saveJson.value && saveJson.value.action === "save") {
+        const e = saveJson.value;
+        saveDiario({ data: hoje, resultado: e.resultado, dificuldade: e.dificuldade, reflexao: e.reflexao });
+      }
+      const display = text.replace(/\{[^{}]*"action"\s*:\s*"save"[\s\S]*?\}/g, "").trim();
+      setMsgs(m => [...m, { role: "assistant", content: display || "Não consegui responder agora. Pode reformular sua mensagem?" }]);
     } catch (e) { setMsgs(m => [...m, { role: "assistant", content: "Erro de conexão. Tente novamente." }]); }
     setLoading(false);
   };

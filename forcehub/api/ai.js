@@ -1,24 +1,33 @@
 // api/ai.js — Proxy serverless de IA (provider-agnóstico)
-// A chave fica SOMENTE no backend. O frontend chama /api/ai e recebe sempre
-// uma resposta no formato { content: [{ type: "text", text }], stop_reason }.
-//
-// Provedor escolhido por variável de ambiente, em ordem de preferência:
-//   1. GEMINI_API_KEY     -> Google Gemini (free tier, sem cartão)
-//   2. ANTHROPIC_API_KEY  -> Anthropic (pago)
+// Resposta sempre no formato { content: [{ type: "text", text }], stop_reason }.
+// Provedor por env, em ordem: GEMINI_API_KEY (free) -> ANTHROPIC_API_KEY (pago).
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
 const ANTHROPIC_VERSION = "2023-06-01";
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Método não permitido" });
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Tenta novamente em erros transitórios (429 / 5xx).
+async function fetchRetry(url, opts, tries = 2) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url, opts);
+      if (r.ok || (r.status !== 429 && r.status < 500)) return r;
+      last = r;
+    } catch (e) { last = e; }
+    if (i < tries - 1) await sleep(700 * (i + 1));
   }
+  if (last instanceof Response) return last;
+  throw last || new Error("Falha de rede");
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido" });
 
   let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch (e) { body = {}; }
-  }
+  if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
   const { messages, system, max_tokens = 1500, tools } = body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -31,15 +40,9 @@ export default async function handler(req, res) {
   );
 
   try {
-    if (process.env.GEMINI_API_KEY) {
-      return await viaGemini({ res, messages, system, maxTokens, wantsSearch });
-    }
-    if (process.env.ANTHROPIC_API_KEY) {
-      return await viaAnthropic({ res, messages, system, maxTokens, tools });
-    }
-    return res.status(503).json({
-      error: "IA indisponível: defina GEMINI_API_KEY (gratuita) ou ANTHROPIC_API_KEY.",
-    });
+    if (process.env.GEMINI_API_KEY) return await viaGemini({ res, messages, system, maxTokens, wantsSearch });
+    if (process.env.ANTHROPIC_API_KEY) return await viaAnthropic({ res, messages, system, maxTokens, tools });
+    return res.status(503).json({ error: "IA indisponível: defina GEMINI_API_KEY (gratuita) ou ANTHROPIC_API_KEY." });
   } catch (e) {
     return res.status(502).json({ error: "Erro de conexão com a IA: " + e.message });
   }
@@ -52,27 +55,31 @@ async function viaGemini({ res, messages, system, maxTokens, wantsSearch }) {
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: String(m.content ?? "") }],
     })),
-    generationConfig: { maxOutputTokens: maxTokens },
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
   };
   if (system) payload.systemInstruction = { parts: [{ text: system }] };
   if (wantsSearch) payload.tools = [{ google_search: {} }];
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-  const r = await fetch(url, {
+  const r = await fetchRetry(url, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
     body: JSON.stringify(payload),
   });
-  const data = await r.json();
-  if (!r.ok) {
-    return res.status(r.status).json({ error: data?.error?.message || "Falha ao chamar o Gemini" });
-  }
-  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || ("Falha no Gemini (HTTP " + r.status + ")") });
+
+  const cand = data?.candidates?.[0];
+  const parts = cand?.content?.parts || [];
   const text = parts.filter(p => typeof p.text === "string").map(p => p.text).join("");
-  return res.status(200).json({
-    content: [{ type: "text", text }],
-    stop_reason: data?.candidates?.[0]?.finishReason || "end_turn",
-  });
+  const finish = cand?.finishReason;
+
+  // Resposta vazia: provavelmente bloqueio de segurança ou recitação.
+  if (!text) {
+    const reason = data?.promptFeedback?.blockReason || finish || "sem conteúdo";
+    return res.status(200).json({ content: [{ type: "text", text: "" }], stop_reason: reason, warning: "Resposta vazia da IA (" + reason + ")" });
+  }
+  return res.status(200).json({ content: [{ type: "text", text }], stop_reason: finish || "end_turn" });
 }
 
 // ─── Anthropic ────────────────────────────────────────────────────────────────
@@ -81,7 +88,7 @@ async function viaAnthropic({ res, messages, system, maxTokens, tools }) {
   if (system) payload.system = system;
   if (Array.isArray(tools) && tools.length) payload.tools = tools;
 
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await fetchRetry("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -90,9 +97,7 @@ async function viaAnthropic({ res, messages, system, maxTokens, tools }) {
     },
     body: JSON.stringify(payload),
   });
-  const data = await r.json();
-  if (!r.ok) {
-    return res.status(r.status).json({ error: data?.error?.message || "Falha ao chamar a Anthropic" });
-  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || ("Falha na Anthropic (HTTP " + r.status + ")") });
   return res.status(200).json(data);
 }
