@@ -657,7 +657,33 @@ function ConselheiroScreen({ userId }) {
   const [perfil, setPerfil] = useState(null);
   const [diario, setDiario] = useState([]);
   const [showDiario, setShowDiario] = useState(false);
+  const [pending, setPending] = useState([]); // anexos a enviar na próxima mensagem
+  const [attachError, setAttachError] = useState("");
   const endRef = useRef(null);
+  const fileRef = useRef(null);
+  const MAX_FILE = 3.5 * 1024 * 1024; // ~3.5MB por arquivo (limite de payload serverless)
+  const ACCEPT = "image/png,image/jpeg,image/webp,image/heic,image/heif,application/pdf";
+
+  const pickFiles = async (fileList) => {
+    setAttachError("");
+    const files = Array.from(fileList || []);
+    for (const f of files) {
+      if (f.size > MAX_FILE) { setAttachError(`"${f.name}" excede 3,5 MB.`); continue; }
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result);
+          r.onerror = reject;
+          r.readAsDataURL(f);
+        });
+        const data = String(dataUrl).split(",")[1] || "";
+        const mimeType = f.type || "application/octet-stream";
+        setPending(p => [...p, { name: f.name, mimeType, data, dataUrl: String(dataUrl), isImage: mimeType.startsWith("image/") }]);
+      } catch (e) { setAttachError("Falha ao ler " + f.name); }
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  };
+  const removePending = (i) => setPending(p => p.filter((_, j) => j !== i));
   useEffect(() => { endRef.current && endRef.current.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
   useEffect(() => {
     const load = async () => {
@@ -682,13 +708,14 @@ function ConselheiroScreen({ userId }) {
   const buildSys = () => {
     const ps = perfil ? "Capital: R$ " + perfil.capital.toLocaleString("pt-BR") + " | Pref: " + perfil.preferencia + " | WIN: " + perfil.contratosWIN + " ctr | WDO: " + perfil.contratosWDO + " ctr" : "Perfil nao definido";
     const dh = diario.filter(d => d.data === hoje);
-    return "Voce e O Conselheiro — coaching de trading pessoal na B3. Direto, empatico e tecnico. De trader para trader.\n\nMARGENS: WIN R$ 1.000/contrato | WDO R$ 1.500/contrato\nPERFIL: " + ps + "\nHOJE: " + (dh.length ? dh.map(d => "R$ " + (d.resultado >= 0 ? "+" : "") + d.resultado.toFixed(2)).join(", ") : "Sem resultado") + "\nBALANCO: Hoje " + pctStr(totalHoje) + " | Semana " + pctStr(totalSemana) + " | Mes " + pctStr(totalMes) + "\n\nRESPONSABILIDADES:\n1. CAPITAL: Quando informar capital, calcule contratos WIN (capital/1000) e WDO (capital/1500). Informe e pergunte preferencia.\n2. GESTAO: Sugira parciais, protecao. Alta volatilidade = parcial sem mover stop. Normal = parcial + stop na entrada.\n3. MAO DE ALFACE: Se fechar cedo/nao segurar: identifique o padrao, trabalhe autoconfianca, tecnicas (alarme no alvo, fechar tela), faca refletir.\n4. COMPORTAMENTO: Furia/revenge trading: alerte com firmeza e empatia, sugira travas da plataforma, recomende parar.\n5. AUTOCONFIANCA: Confianca vem de repeticao. Voce nao opera achismo, opera plano testado.\n6. RESULTADO: Final do dia pergunte resultado e dificuldades. Analise comportamental. Retorne JSON: {\"action\":\"save\",\"resultado\":500,\"dificuldade\":\"TEXTO\",\"reflexao\":\"TEXTO\"}\n\nSeja proativo. Portuguese. Direto e objetivo.";
+    return "Voce e O Conselheiro — coaching de trading pessoal na B3. Direto, empatico e tecnico. De trader para trader.\n\nMARGENS: WIN R$ 1.000/contrato | WDO R$ 1.500/contrato\nPERFIL: " + ps + "\nHOJE: " + (dh.length ? dh.map(d => "R$ " + (d.resultado >= 0 ? "+" : "") + d.resultado.toFixed(2)).join(", ") : "Sem resultado") + "\nBALANCO: Hoje " + pctStr(totalHoje) + " | Semana " + pctStr(totalSemana) + " | Mes " + pctStr(totalMes) + "\n\nRESPONSABILIDADES:\n1. CAPITAL: Quando informar capital, calcule contratos WIN (capital/1000) e WDO (capital/1500). Informe e pergunte preferencia.\n2. GESTAO: Sugira parciais, protecao. Alta volatilidade = parcial sem mover stop. Normal = parcial + stop na entrada.\n3. MAO DE ALFACE: Se fechar cedo/nao segurar: identifique o padrao, trabalhe autoconfianca, tecnicas (alarme no alvo, fechar tela), faca refletir.\n4. COMPORTAMENTO: Furia/revenge trading: alerte com firmeza e empatia, sugira travas da plataforma, recomende parar.\n5. AUTOCONFIANCA: Confianca vem de repeticao. Voce nao opera achismo, opera plano testado.\n6. RESULTADO: Final do dia pergunte resultado e dificuldades. Analise comportamental. Retorne JSON: {\"action\":\"save\",\"resultado\":500,\"dificuldade\":\"TEXTO\",\"reflexao\":\"TEXTO\"}\n\nANEXOS: O trader pode enviar imagens (prints de graficos, setups, trades) e PDFs (extratos, notas). Quando houver anexo, analise-o tecnicamente e relacione ao coaching.\n\nSeja proativo. Portuguese. Direto e objetivo.";
   };
   const send = async (msg) => {
     const txt = msg || input.trim();
-    if (!txt || loading) return;
-    setInput("");
-    const newMsgs = [...msgs, { role: "user", content: txt }];
+    const attached = pending;
+    if ((!txt && attached.length === 0) || loading) return;
+    setInput(""); setPending([]); setAttachError("");
+    const newMsgs = [...msgs, { role: "user", content: txt, files: attached }];
     setMsgs(newMsgs); setLoading(true);
     try {
       if (!perfil) {
@@ -704,7 +731,18 @@ function ConselheiroScreen({ userId }) {
         const pref = l.includes("índice") || l.includes("indice") || l.includes("win") ? "Índice (WIN)" : l.includes("dólar") || l.includes("dolar") || l.includes("wdo") ? "Dólar (WDO)" : (l.includes("dois") || l.includes("ambos") || l.includes("tudo")) ? "Índice e Dólar" : null;
         if (pref) savePerfil({ ...perfil, preferencia: pref });
       }
-      const data = await callAI({ max_tokens: 1500, system: buildSys(), messages: newMsgs.map(m => ({ role: m.role, content: m.content })) });
+      // Envia os anexos apenas na mensagem atual (evita reenviar imagens a cada turno).
+      const apiMessages = newMsgs.map((m, idx) => {
+        const last = idx === newMsgs.length - 1;
+        if (last && m.files && m.files.length) {
+          const parts = [];
+          if (m.content) parts.push({ type: "text", text: m.content });
+          m.files.forEach(f => parts.push({ type: "file", mimeType: f.mimeType, data: f.data }));
+          return { role: m.role, content: parts };
+        }
+        return { role: m.role, content: m.content };
+      });
+      const data = await callAI({ max_tokens: 1500, system: buildSys(), messages: apiMessages });
       const text = data.content ? data.content.map(b => b.text || "").join("") : "";
       // Detecta o JSON de salvamento de resultado (tolerante a espaços/formato).
       const saveJson = extractJSON(text, ['"action"']);
@@ -755,6 +793,14 @@ function ConselheiroScreen({ userId }) {
                   </div>
                 )}
                 {m.content}
+                {m.files && m.files.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: m.content ? 10 : 0 }}>
+                    {m.files.map((f, k) => f.isImage
+                      ? <img key={k} src={f.dataUrl} alt={f.name} style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, border: "1px solid " + T.lineGold }} />
+                      : <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.inset, border: "1px solid " + T.line, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: T.mut }}>📄 {f.name}</span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -762,9 +808,25 @@ function ConselheiroScreen({ userId }) {
           <div ref={endRef} />
         </div>
 
-        <div style={{ flexShrink: 0, padding: 16, borderTop: "1px solid " + T.line, display: "flex", gap: 10 }}>
-          <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="Fale com O Conselheiro..." style={{ flex: 1 }} />
-          <Button onClick={() => send()} disabled={loading} style={{ fontSize: 18, padding: "0 18px" }}>↑</Button>
+        <div style={{ flexShrink: 0, padding: 16, borderTop: "1px solid " + T.line, display: "flex", flexDirection: "column", gap: 10 }}>
+          {attachError && <div style={{ fontSize: 12, color: T.red }}>⚠ {attachError}</div>}
+          {pending.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {pending.map((f, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: T.inset, border: "1px solid " + T.line, borderRadius: 8, padding: "5px 6px", fontSize: 12, color: T.mut }}>
+                  {f.isImage ? <img src={f.dataUrl} alt={f.name} style={{ width: 28, height: 28, objectFit: "cover", borderRadius: 5 }} /> : <span style={{ fontSize: 16 }}>📄</span>}
+                  <span style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                  <button className="fh-btn" onClick={() => removePending(i)} style={{ background: "transparent", border: "none", color: T.dim, fontSize: 16, padding: 0, width: 18, height: 18 }}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10 }}>
+            <input ref={fileRef} type="file" accept={ACCEPT} multiple style={{ display: "none" }} onChange={e => pickFiles(e.target.files)} />
+            <Button variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={loading} title="Anexar imagem ou PDF" style={{ fontSize: 18, padding: "0 14px" }}>📎</Button>
+            <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="Fale com O Conselheiro..." style={{ flex: 1 }} />
+            <Button onClick={() => send()} disabled={loading} style={{ fontSize: 18, padding: "0 18px" }}>↑</Button>
+          </div>
         </div>
       </div>
 

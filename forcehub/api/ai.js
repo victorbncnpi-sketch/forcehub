@@ -8,6 +8,42 @@ const ANTHROPIC_VERSION = "2023-06-01";
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// ─── Tradução de conteúdo multimodal ─────────────────────────────────────────
+// O frontend envia content como string OU array de partes:
+//   [{ type:"text", text }, { type:"file"|"image", mimeType, data /* base64 */ }]
+
+function geminiParts(content) {
+  if (typeof content === "string") return [{ text: content }];
+  if (Array.isArray(content)) {
+    const parts = content.map(p => {
+      if (p.type === "text") return { text: String(p.text || "") };
+      if ((p.type === "file" || p.type === "image") && p.data) {
+        return { inline_data: { mime_type: p.mimeType || "application/octet-stream", data: p.data } };
+      }
+      return null;
+    }).filter(Boolean);
+    return parts.length ? parts : [{ text: "" }];
+  }
+  return [{ text: String(content ?? "") }];
+}
+
+function anthropicContent(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map(p => {
+      if (p.type === "text") return { type: "text", text: String(p.text || "") };
+      if (p.data) {
+        const media = p.mimeType || "image/png";
+        return media === "application/pdf"
+          ? { type: "document", source: { type: "base64", media_type: media, data: p.data } }
+          : { type: "image", source: { type: "base64", media_type: media, data: p.data } };
+      }
+      return null;
+    }).filter(Boolean);
+  }
+  return content;
+}
+
 // Tenta novamente em erros transitórios (429 / 5xx).
 async function fetchRetry(url, opts, tries = 2) {
   let last;
@@ -53,7 +89,7 @@ async function viaGemini({ res, messages, system, maxTokens, wantsSearch }) {
   const payload = {
     contents: messages.map(m => ({
       role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: String(m.content ?? "") }],
+      parts: geminiParts(m.content),
     })),
     generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
   };
@@ -84,7 +120,11 @@ async function viaGemini({ res, messages, system, maxTokens, wantsSearch }) {
 
 // ─── Anthropic ────────────────────────────────────────────────────────────────
 async function viaAnthropic({ res, messages, system, maxTokens, tools }) {
-  const payload = { model: ANTHROPIC_MODEL, max_tokens: maxTokens, messages };
+  const payload = {
+    model: ANTHROPIC_MODEL,
+    max_tokens: maxTokens,
+    messages: messages.map(m => ({ role: m.role, content: anthropicContent(m.content) })),
+  };
   if (system) payload.system = system;
   if (Array.isArray(tools) && tools.length) payload.tools = tools;
 
