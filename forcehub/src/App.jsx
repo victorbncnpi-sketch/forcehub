@@ -665,6 +665,7 @@ function CarteiraScreen({ isAdmin }) {
 function ConselheiroScreen({ userId }) {
   const MARGEM_WIN = 1000; const MARGEM_WDO = 1500;
   const baseUrl = "/api/conselheiro?user=" + encodeURIComponent(userId || "anon");
+  const CHAT_W = 820; // largura máxima da coluna do chat (centralizada)
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -786,7 +787,7 @@ function ConselheiroScreen({ userId }) {
         </div>
 
         {perfil && perfil.preferencia !== "a definir" && (
-          <div style={{ flexShrink: 0, margin: "14px 18px 0", background: T.panel2, border: "1px solid " + T.line, borderRadius: 12, padding: "12px 18px", display: "flex", gap: 28, flexWrap: "wrap" }}>
+          <div style={{ flexShrink: 0, maxWidth: CHAT_W, width: "calc(100% - 36px)", margin: "14px auto 0", background: T.panel2, border: "1px solid " + T.line, borderRadius: 12, padding: "12px 18px", display: "flex", gap: 28, flexWrap: "wrap" }}>
             {[["Capital", "R$ " + perfil.capital.toLocaleString("pt-BR"), T.gold], ["Preferência", perfil.preferencia, T.text], ["WIN", perfil.contratosWIN + " ctr", T.blue], ["WDO", perfil.contratosWDO + " ctr", T.purple]].map(([l, v, c]) => (
               <div key={l}>
                 <div style={{ fontSize: 10, color: T.dim, textTransform: "uppercase", letterSpacing: 0.5 }}>{l}</div>
@@ -796,7 +797,8 @@ function ConselheiroScreen({ userId }) {
           </div>
         )}
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: 18 }}>
+          <div style={{ maxWidth: CHAT_W, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
           {msgs.map((m, i) => (
             <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
               <div style={{ maxWidth: "82%", background: m.role === "user" ? T.goldSoft : T.panel, border: "1px solid " + (m.role === "user" ? T.lineGold : T.line), borderRadius: 14, padding: "13px 16px", fontSize: 15, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
@@ -820,9 +822,11 @@ function ConselheiroScreen({ userId }) {
           ))}
           {loading && <div style={{ display: "flex" }}><div style={{ background: T.panel, border: "1px solid " + T.line, borderRadius: 14, padding: "16px 20px" }}><Dots /></div></div>}
           <div ref={endRef} />
+          </div>
         </div>
 
-        <div style={{ flexShrink: 0, padding: 16, borderTop: "1px solid " + T.line, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ flexShrink: 0, padding: 16, borderTop: "1px solid " + T.line }}>
+          <div style={{ maxWidth: CHAT_W, margin: "0 auto", display: "flex", flexDirection: "column", gap: 10 }}>
           {attachError && <div style={{ fontSize: 12, color: T.red }}>⚠ {attachError}</div>}
           {pending.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -840,6 +844,7 @@ function ConselheiroScreen({ userId }) {
             <Button variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={loading} title="Anexar imagem ou PDF" style={{ fontSize: 18, padding: "0 14px" }}>📎</Button>
             <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="Fale com O Conselheiro..." style={{ flex: 1 }} />
             <Button onClick={() => send()} disabled={loading} style={{ fontSize: 18, padding: "0 18px" }}>↑</Button>
+          </div>
           </div>
         </div>
       </div>
