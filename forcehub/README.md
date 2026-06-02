@@ -22,9 +22,13 @@ Aplicação React (Create React App) + funções serverless na Vercel.
 | Frontend | `src/App.jsx` | SPA React com login, menu e as 3 telas |
 | Proxy de IA | `api/ai.js` | Encaminha à IA usando a chave do backend (Gemini ou Anthropic). A chave nunca vai ao navegador |
 | Cotações | `api/market-data.js` | Busca OHLC de WIN/WDO/IBOV ao vivo na Brapi |
+| Carteira | `api/carteira.js` | Persiste recomendações + posições (compartilhadas: admin publica, clientes leem) |
+| Conselheiro | `api/conselheiro.js` | Persiste perfil + diário por usuário (cross-device) |
+| Banco | `api/_redis.js` | Cliente Upstash Redis compartilhado |
 
-> Não há banco de dados: as cotações são buscadas sob demanda e o histórico do
-> Conselheiro fica no `localStorage` do navegador.
+> As cotações são buscadas sob demanda (sem persistência). A carteira e o
+> Conselheiro usam Upstash Redis. Sem o banco configurado, a carteira não
+> sincroniza/persiste (a UI avisa) e o resto continua funcionando.
 
 ## Deploy no Vercel
 
@@ -41,8 +45,16 @@ Veja `.env.example`. Configure no painel do Vercel (e em `.env.local` para dev):
 |----------|-------------|---------------------|
 | `GEMINI_API_KEY` | para IA | https://aistudio.google.com/apikey (sem cartão) |
 | `BRAPI_TOKEN` | para cotações | https://brapi.dev |
+| `UPSTASH_REDIS_REST_URL` | para persistência | Vercel → Storage → Upstash |
+| `UPSTASH_REDIS_REST_TOKEN` | para persistência | Vercel → Storage → Upstash |
 | `ANTHROPIC_API_KEY` | opcional | alternativa paga ao Gemini |
 | `GEMINI_MODEL` | opcional | padrão `gemini-2.5-flash` |
+
+### Criar o banco (Upstash Redis, grátis)
+
+No Vercel: **Storage → Create Database → Marketplace → Upstash (Redis)**. Ao
+conectar ao projeto, as variáveis `UPSTASH_REDIS_REST_URL` e
+`UPSTASH_REDIS_REST_TOKEN` são injetadas automaticamente.
 
 > Sem `GEMINI_API_KEY` (nem `ANTHROPIC_API_KEY`), as telas de IA exibem aviso de
 > indisponibilidade — o restante da aplicação continua funcionando.
