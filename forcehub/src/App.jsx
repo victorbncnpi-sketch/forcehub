@@ -18,19 +18,28 @@ function checkExpiry(user) {
   return new Date(user.expiry) >= new Date();
 }
 
-// ─── Persistência local (substitui o window.storage do ambiente de Artifacts) ─
-const storage = {
-  get: (key) => {
-    try { const v = localStorage.getItem(key); return v == null ? null : { value: v }; }
-    catch (e) { return null; }
+// ─── Camada de dados (backend Upstash via /api/*) ─────────────────────────────
+const api = {
+  get: async (path) => {
+    const r = await fetch(path);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    return j;
   },
-  set: (key, value) => {
-    try { localStorage.setItem(key, value); } catch (e) {}
+  post: async (path, body) => {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    return j;
   },
 };
 
 // ─── Chamada de IA via proxy serverless (/api/ai) ─────────────────────────────
-// A chave da Anthropic NUNCA fica no frontend — fica no backend (ANTHROPIC_API_KEY).
+// A chave de IA NUNCA fica no frontend — fica no backend (GEMINI/ANTHROPIC).
 async function callAI(body) {
   const res = await fetch("/api/ai", {
     method: "POST",
@@ -403,8 +412,32 @@ function CarteiraScreen({ onBack, isAdmin }) {
   const [scanError, setScanError] = useState(null);
   const [form, setForm] = useState({ ticker: "", nome: "", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
   const [time, setTime] = useState(new Date());
+  const [loadError, setLoadError] = useState(null);
   const idRef = useRef(1);
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  // Carrega a carteira compartilhada do backend (Upstash). Admin publica, clientes leem.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const j = await api.get("/api/carteira");
+        if (!active) return;
+        setAcoes(j.recomendacoes || []);
+        setPosicoes(j.posicoes || []);
+        const ids = [...(j.recomendacoes || []), ...(j.posicoes || [])]
+          .flatMap(x => [x.id || 0, x.posId || 0]);
+        idRef.current = Math.max(0, ...ids) + 1;
+      } catch (e) { if (active) setLoadError(e.message); }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  // Persiste o estado completo da carteira (somente admin grava na prática).
+  const saveCarteira = async (recs, poss) => {
+    try { await api.post("/api/carteira", { recomendacoes: recs, posicoes: poss }); }
+    catch (e) { setLoadError("Falha ao salvar: " + e.message); }
+  };
 
   const setF = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const calcRR = (e, a, s) => {
@@ -416,22 +449,34 @@ function CarteiraScreen({ onBack, isAdmin }) {
     const e = parseFloat(form.entrada), a = parseFloat(form.alvo), s = parseFloat(form.stop);
     if (!form.ticker || !e || !a || !s) return;
     const nova = { id: idRef.current++, ticker: form.ticker.toUpperCase(), nome: form.nome, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false };
-    setAcoes(prev => [...prev, nova]);
+    const next = [...acoes, nova];
+    setAcoes(next);
+    saveCarteira(next, posicoes);
     setForm({ ticker: "", nome: "", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
     setShowForm(false);
   };
+  const removeAcao = (id) => {
+    const next = acoes.filter(x => x.id !== id);
+    setAcoes(next);
+    saveCarteira(next, posicoes);
+  };
   const addFromScan = (op) => {
     const nova = { id: idRef.current++, ticker: op.ticker, nome: op.nome, entrada: op.entrada, alvo: op.alvo, stop: op.stop, qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true };
-    setAcoes(prev => [...prev, nova]);
-    setPosicoes(prev => [...prev, { ...nova, posId: idRef.current++, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null }]);
+    const nextAcoes = [...acoes, nova];
+    const nextPos = [...posicoes, { ...nova, posId: idRef.current++, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null }];
+    setAcoes(nextAcoes);
+    setPosicoes(nextPos);
+    saveCarteira(nextAcoes, nextPos);
     setAba("posicoes");
   };
   const fecharPosicao = (posId, precoSaida) => {
-    setPosicoes(prev => prev.map(p => {
+    const nextPos = posicoes.map(p => {
       if (p.posId !== posId) return p;
       const pct = ((precoSaida - p.entrada) / p.entrada) * 100;
       return { ...p, status: "FECHADA", precoSaida, dataSaida: new Date().toLocaleDateString("pt-BR"), resultado: parseFloat(pct.toFixed(2)) };
-    }));
+    });
+    setPosicoes(nextPos);
+    saveCarteira(acoes, nextPos);
   };
   const scan = async () => {
     setScanning(true); setScanError(null); setScanResult(null);
@@ -498,6 +543,12 @@ function CarteiraScreen({ onBack, isAdmin }) {
       </div>
 
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+
+        {loadError && (
+          <div style={{ background: "#1a1000", border: "1px solid #7c5e00", borderRadius: 6, padding: "10px 16px", color: "#fbbf24", fontSize: 14 }}>
+            ⚠ Persistência indisponível ({loadError}). Configure o banco (UPSTASH_REDIS_REST_URL/TOKEN) para salvar a carteira.
+          </div>
+        )}
 
         {aba === "carteira" && (
           <>
@@ -577,7 +628,7 @@ function CarteiraScreen({ onBack, isAdmin }) {
                         </div>
                         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                           <span style={{ fontSize: 16, fontWeight: "bold", color: a.alvo > a.entrada ? "#22c55e" : "#ef4444" }}>{a.alvo > a.entrada ? "▲ COMPRA" : "▼ VENDA"}</span>
-                          {isAdmin && <button onClick={() => setAcoes(p => p.filter(x => x.id !== a.id))} style={{ background: "none", border: "1px solid #222", color: "#444", cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontSize: 14, fontFamily: "monospace" }}>✕</button>}
+                          {isAdmin && <button onClick={() => removeAcao(a.id)} style={{ background: "none", border: "1px solid #222", color: "#444", cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontSize: 14, fontFamily: "monospace" }}>✕</button>}
                         </div>
                       </div>
                       <div style={{ padding: "16px 18px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
@@ -676,7 +727,7 @@ function CarteiraScreen({ onBack, isAdmin }) {
 
 function ConselheiroScreen({ onBack, userId }) {
   const MARGEM_WIN = 1000; const MARGEM_WDO = 1500;
-  const KEYS = { diario: "diario_" + userId, perfil: "perfil_" + userId };
+  const baseUrl = "/api/conselheiro?user=" + encodeURIComponent(userId || "anon");
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -690,17 +741,16 @@ function ConselheiroScreen({ onBack, userId }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const p = await storage.get(KEYS.perfil);
-        const d = await storage.get(KEYS.diario);
-        if (p) setPerfil(JSON.parse(p.value));
-        if (d) setDiario(JSON.parse(d.value));
+        const j = await api.get(baseUrl);
+        if (j.perfil) setPerfil(j.perfil);
+        if (Array.isArray(j.diario)) setDiario(j.diario);
       } catch(e) {}
       setMsgs([{ role: "assistant", content: "Olá! Sou O Conselheiro — seu coaching de trading pessoal.\n\nEstou aqui para te ajudar a operar com disciplina, gestão de risco e consistência.\n\nPara começar: qual é o capital que você tem disponível para operar hoje?" }]);
     };
     load();
   }, []);
-  const savePerfil = async (p) => { try { await storage.set(KEYS.perfil, JSON.stringify(p)); } catch(e) {} setPerfil(p); };
-  const saveDiario = async (entry) => { const novo = [...diario, entry]; try { await storage.set(KEYS.diario, JSON.stringify(novo)); } catch(e) {} setDiario(novo); };
+  const savePerfil = async (p) => { setPerfil(p); try { await api.post(baseUrl, { perfil: p }); } catch(e) {} };
+  const saveDiario = async (entry) => { const novo = [...diario, entry]; setDiario(novo); try { await api.post(baseUrl, { diario: novo }); } catch(e) {} };
   const hoje = new Date().toLocaleDateString("pt-BR");
   const totalHoje = diario.filter(d => d.data === hoje).reduce((s, d) => s + d.resultado, 0);
   const totalSemana = diario.filter(d => { const dt = new Date(d.data.split("/").reverse().join("-")); const seg = new Date(); seg.setDate(seg.getDate() - seg.getDay() + 1); seg.setHours(0,0,0,0); return dt >= seg; }).reduce((s, d) => s + d.resultado, 0);
