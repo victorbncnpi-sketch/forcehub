@@ -1,11 +1,5 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "build",
-  "framework": "create-react-app",
-  "crons": [
-    {
-      "path": "/api/fetch-market?secret=forcehub2026cron",
-      "schedule": "0 22 * * 1-5"
-    }
-  ]
+  "framework": "create-react-app"
 }
