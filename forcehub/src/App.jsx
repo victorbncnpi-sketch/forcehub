@@ -205,11 +205,12 @@ function PanoramaScreen() {
           const next = { ...prev };
           TICKERS.forEach(tk => {
             const grid = empty();
+            const fmtIn = (v) => v == null ? "" : (tk === "WDO" ? Number(v).toFixed(1) : String(Math.round(Number(v))));
             (j.data[tk] || []).forEach(e => {
               const wd = new Date(e.date + "T12:00:00").getDay() - 1;
               if (wd >= 0 && wd <= 4) {
                 any = true;
-                grid[wd] = { weekday: DAYS[wd], high: e.high != null ? String(e.high) : "", low: e.low != null ? String(e.low) : "" };
+                grid[wd] = { weekday: DAYS[wd], high: fmtIn(e.high), low: fmtIn(e.low) };
               }
             });
             next[tk] = grid;
@@ -258,7 +259,7 @@ function PanoramaScreen() {
     setNewsLoading(false);
   };
 
-  const numInput = (color) => ({ textAlign: "center", padding: "8px 8px", fontSize: 14, color, borderColor: color + "44" });
+  const cInput = (color) => ({ textAlign: "center", padding: "6px 4px", fontSize: 12, color, borderColor: color + "44" });
   const todayIdx = new Date().getDay() - 1;
 
   return (
@@ -270,52 +271,41 @@ function PanoramaScreen() {
           : marketLoaded ? <Badge tone="green">● DADOS DO MERCADO</Badge> : <Badge tone="mut">○ ENTRADA MANUAL</Badge>}
       </div>
 
-      {TICKERS.map(ticker => {
-        const avg = getAvg(ticker);
-        const avgHigh = fmtV(ticker, rows[ticker].map(r => parseFloat(String(r.high).replace(",", ".")) || 0).filter(v => v > 0).reduce((a, b, _, arr) => a + b / arr.length, 0));
-        const avgLow = fmtV(ticker, rows[ticker].map(r => parseFloat(String(r.low).replace(",", ".")) || 0).filter(v => v > 0).reduce((a, b, _, arr) => a + b / arr.length, 0));
-        return (
-          <Card key={ticker} style={{ overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid " + T.line, background: T.panel2 }}>
-              <span style={{ fontSize: 20, fontWeight: 800, color: T.gold, fontFamily: T.mono, letterSpacing: 1 }}>{ticker}</span>
-              <span style={{ fontSize: 13, color: T.mut }}>{LABELS[ticker]}</span>
-              {avg != null && <Badge tone="gold" style={{ marginLeft: "auto" }}>AMPL. MÉDIA {fmtV(ticker, avg)} pts</Badge>}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 1fr 1fr", padding: "9px 14px", borderBottom: "1px solid " + T.line }}>
-              {["DIA", "MÁXIMA", "MÍNIMA", "AMPLITUDE"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
-            </div>
-            {rows[ticker].map((row, i) => {
-              const amp = getAmp(row);
-              const ac = ampColor(amp, avg);
-              const isToday = todayIdx === i;
-              return (
-                <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 1fr 1fr 1fr", alignItems: "center", gap: 10, padding: "7px 14px", borderBottom: "1px solid " + T.line, background: isToday ? T.goldSoft : "transparent" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <span style={{ fontSize: 14, color: isToday ? T.gold : T.mut, fontWeight: isToday ? 700 : 400 }}>{row.weekday}</span>
-                    {isToday && <span style={{ fontSize: 9, color: T.gold }}>●</span>}
-                  </div>
-                  <Input mono value={row.high} onChange={e => setCell(ticker, i, "high", e.target.value)} placeholder={ticker === "WDO" ? "0.0" : "000000"} style={numInput(T.blue)} />
-                  <Input mono value={row.low} onChange={e => setCell(ticker, i, "low", e.target.value)} placeholder={ticker === "WDO" ? "0.0" : "000000"} style={numInput(T.purple)} />
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: T.mono }}>
-                    {amp != null ? (
-                      <>
-                        <span style={{ fontSize: 16, fontWeight: 700, color: ac }}>{fmtV(ticker, amp)}</span>
-                        {avg != null && <span style={{ fontSize: 12, color: ac }}>{amp >= avg ? "▲" : "▼"}{Math.abs(((amp / avg) - 1) * 100).toFixed(0)}%</span>}
-                      </>
-                    ) : <span style={{ color: T.dim }}>—</span>}
-                  </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 14 }}>
+        {TICKERS.map(ticker => {
+          const avg = getAvg(ticker);
+          return (
+            <Card key={ticker} style={{ overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid " + T.line, background: T.panel2 }}>
+                <span style={{ fontSize: 16, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{ticker}</span>
+                <span style={{ fontSize: 12, color: T.mut }}>{LABELS[ticker]}</span>
+                <div style={{ marginLeft: "auto", textAlign: "right", lineHeight: 1.1 }}>
+                  <div style={{ fontSize: 9, color: T.dim, letterSpacing: 0.5 }}>AMPL. MÉDIA</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{avg != null ? fmtV(ticker, avg) : "—"}</div>
                 </div>
-              );
-            })}
-            <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 1fr 1fr", alignItems: "center", gap: 10, padding: "10px 14px", background: T.panel2 }}>
-              <div style={{ fontSize: 12, color: T.gold, letterSpacing: 0.5 }}>MÉDIA</div>
-              <div style={{ fontSize: 14, color: T.blue, fontFamily: T.mono }}>{avgHigh}</div>
-              <div style={{ fontSize: 14, color: T.purple, fontFamily: T.mono }}>{avgLow}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: T.gold, fontFamily: T.mono }}>{avg != null ? fmtV(ticker, avg) : "—"}</div>
-            </div>
-          </Card>
-        );
-      })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "34px 1fr 1fr 62px", gap: 8, padding: "6px 12px", borderBottom: "1px solid " + T.line }}>
+                {["DIA", "MÁX", "MÍN", "AMPL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k === 3 ? "right" : "left" }}>{h}</div>)}
+              </div>
+              {rows[ticker].map((row, i) => {
+                const amp = getAmp(row);
+                const ac = ampColor(amp, avg);
+                const isToday = todayIdx === i;
+                return (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "34px 1fr 1fr 62px", alignItems: "center", gap: 8, padding: "5px 12px", borderBottom: i < 4 ? "1px solid " + T.line : "none", background: isToday ? T.goldSoft : "transparent" }}>
+                    <span style={{ fontSize: 12, color: isToday ? T.gold : T.mut, fontWeight: isToday ? 700 : 400 }}>{row.weekday}</span>
+                    <Input mono value={row.high} onChange={e => setCell(ticker, i, "high", e.target.value)} placeholder={ticker === "WDO" ? "0.0" : "000000"} style={cInput(T.blue)} />
+                    <Input mono value={row.low} onChange={e => setCell(ticker, i, "low", e.target.value)} placeholder={ticker === "WDO" ? "0.0" : "000000"} style={cInput(T.purple)} />
+                    <div style={{ textAlign: "right", fontFamily: T.mono }}>
+                      {amp != null ? <span style={{ fontSize: 13, fontWeight: 700, color: ac }}>{fmtV(ticker, amp)}</span> : <span style={{ color: T.dim }}>—</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
+          );
+        })}
+      </div>
 
       <Card style={{ overflow: "hidden" }}>
         <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderBottom: "1px solid " + T.line, background: T.panel2, flexWrap: "wrap" }}>

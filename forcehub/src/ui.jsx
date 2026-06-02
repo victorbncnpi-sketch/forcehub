@@ -41,9 +41,9 @@ input, textarea { font-family: inherit; }
 @keyframes fh-spin { to { transform: rotate(360deg); } }
 @keyframes fh-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-.fh-shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; }
-.fh-side { display: flex; flex-direction: column; background: #101012; border-right: 1px solid ${T.line}; }
-.fh-main { display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
+.fh-shell { display: grid; grid-template-columns: 232px 1fr; grid-template-rows: 100vh; height: 100vh; overflow: hidden; }
+.fh-side { display: flex; flex-direction: column; background: #101012; border-right: 1px solid ${T.line}; min-height: 0; }
+.fh-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .fh-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .fh-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; animation: fh-fade .22s ease; }
 .fh-scroll-x { overflow-x: auto; }
