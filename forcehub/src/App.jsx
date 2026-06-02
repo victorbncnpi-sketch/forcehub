@@ -191,6 +191,7 @@ function PanoramaScreen() {
   const [newsError, setNewsError] = useState(null);
   const [marketLoaded, setMarketLoaded] = useState(false);
   const [loadingMarket, setLoadingMarket] = useState(true);
+  const [marketErrors, setMarketErrors] = useState([]);
 
   useEffect(() => {
     let active = true;
@@ -218,6 +219,7 @@ function PanoramaScreen() {
           return next;
         });
         if (any) setMarketLoaded(true);
+        if (Array.isArray(j.errors) && j.errors.length) setMarketErrors(j.errors);
       } catch (e) { /* mantém entrada manual */ }
       finally { if (active) setLoadingMarket(false); }
     })();
@@ -274,6 +276,11 @@ function PanoramaScreen() {
           ? <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: T.mut }}><Spinner size={14} /> Carregando cotações...</span>
           : marketLoaded ? <Badge tone="green">● DADOS DO MERCADO</Badge> : <Badge tone="mut">○ ENTRADA MANUAL</Badge>}
       </div>
+      {!loadingMarket && marketErrors.length > 0 && (
+        <div style={{ fontSize: 11, color: T.dim, marginTop: -8 }}>
+          ⓘ Fonte indisponível para {marketErrors.map(e => e.ticker).join(", ")} — usando entrada manual nesses ativos.
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 14 }}>
         {TICKERS.map(ticker => {

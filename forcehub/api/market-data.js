@@ -1,12 +1,10 @@
 // api/market-data.js — Cotações para o Panorama
 //
-// WIN e WDO são FUTUROS: usam a API v2 de futuros da Brapi. No "sandbox"
-// (sem token) WIN e WDO são liberados — então NÃO enviamos token nessas
-// chamadas (o plano Free retorna 403 para futuros, mas o sandbox libera).
-// Fluxo: term-structure (contrato mais próximo) -> historical (série diária).
-//
-// IBOV (^BVSP) é índice à vista: usa /api/quote com o token (Free funciona).
-// Dados de futuros são EOD (fim do dia, após ~19h BRT); 'date' vem em Unix(s).
+// WIN e WDO são FUTUROS (API v2 de futuros). No "sandbox" (sem token) a Brapi
+// libera WIN e WDO, MAS só aceita o CÓDIGO DO ATIVO literal ("WIN"/"WDO") — não
+// o contrato (ex.: WINM26). Por isso chamamos /historical?symbol=WIN sem token.
+// IBOV (^BVSP) é índice à vista: /api/quote com o token (Free funciona).
+// Dados de futuros são EOD (após ~19h BRT); 'date' vem em Unix(segundos).
 
 const BRAPI_TOKEN = process.env.BRAPI_TOKEN || "";
 const FUT = "https://brapi.dev/api/v2/futures";
@@ -23,25 +21,31 @@ function toISODate(d) {
   return null;
 }
 
-// Localiza o array de barras na resposta, tolerando variações de formato.
-function extractBars(json) {
-  let arr = [json?.historicalData, json?.historicalDataPrice, json?.data, json?.history]
-    .find(a => Array.isArray(a) && a.length);
-  if (!arr && Array.isArray(json)) arr = json;
-  if (!arr && Array.isArray(json?.results) && json.results[0]) {
-    arr = json.results[0].historicalData || json.results[0].historicalDataPrice || json.results[0].history;
+// Procura recursivamente o primeiro array de barras OHLC, seja qual for o nome
+// do campo na resposta (robusto a variações de formato da API).
+function findBarsArray(obj, depth = 0) {
+  if (obj == null || depth > 5) return null;
+  if (Array.isArray(obj)) {
+    const first = obj.find(x => x && typeof x === "object");
+    if (first && ("date" in first || "close" in first || "settlement" in first || "high" in first || "low" in first)) {
+      return obj;
+    }
+    for (const it of obj) { const f = findBarsArray(it, depth + 1); if (f) return f; }
+    return null;
   }
-  return Array.isArray(arr) ? arr : [];
+  if (typeof obj === "object") {
+    for (const k of Object.keys(obj)) { const f = findBarsArray(obj[k], depth + 1); if (f) return f; }
+  }
+  return null;
 }
 
 function mapBars(bars) {
-  return bars
+  return (bars || [])
     .map(b => ({
       date: toISODate(b.date),
       open: num(b.open),
       high: num(b.high),
       low: num(b.low),
-      // close pode vir null em contrato com pouca liquidez -> usa o ajuste oficial
       close: num(b.close) ?? num(b.settlement),
       volume: num(b.volume) ?? num(b.financialVolume),
     }))
@@ -49,19 +53,17 @@ function mapBars(bars) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// WIN/WDO: sem token (sandbox). Pega o contrato da frente e seu histórico.
+// WIN/WDO: sandbox (sem token), usando o CÓDIGO DO ATIVO (não o contrato).
 async function fetchFuture(asset, numDays) {
-  const tsRes = await fetch(`${FUT}/term-structure?asset=${asset}`);
-  if (!tsRes.ok) throw new Error(`term-structure HTTP ${tsRes.status}`);
-  const ts = await tsRes.json();
-  const contracts = ts?.contracts || ts?.results || [];
-  const symbol = contracts[0]?.symbol;
-  if (!symbol) throw new Error("Sem contrato na curva");
-
-  const hRes = await fetch(`${FUT}/historical?symbol=${encodeURIComponent(symbol)}`);
-  if (!hRes.ok) throw new Error(`historical HTTP ${hRes.status}`);
-  const series = mapBars(extractBars(await hRes.json()));
-  return series.slice(-numDays);
+  const url = `${FUT}/historical?symbol=${asset}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`historical ${asset} HTTP ${r.status}`);
+  const json = await r.json();
+  const bars = findBarsArray(json);
+  if (!bars || !bars.length) {
+    throw new Error(`sem barras para ${asset} (keys: ${Object.keys(json || {}).join(",") || "?"})`);
+  }
+  return mapBars(bars).slice(-numDays);
 }
 
 // IBOV: índice à vista via /api/quote (precisa do token; Free funciona).
@@ -70,10 +72,10 @@ async function fetchIbov(numDays) {
   const range = numDays <= 5 ? "5d" : numDays <= 21 ? "1mo" : "3mo";
   const url = `https://brapi.dev/api/quote/%5EBVSP?range=${range}&interval=1d&token=${BRAPI_TOKEN}`;
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`quote HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`quote IBOV HTTP ${r.status}`);
   const q = (await r.json())?.results?.[0];
-  if (!q) throw new Error("Sem dados");
-  let series = mapBars(extractBars({ historicalDataPrice: q.historicalDataPrice }));
+  if (!q) throw new Error("Sem dados de IBOV");
+  let series = mapBars(findBarsArray(q.historicalDataPrice) || []);
   if (!series.length && q.regularMarketPrice != null) {
     series = [{
       date: new Date().toISOString().split("T")[0],
