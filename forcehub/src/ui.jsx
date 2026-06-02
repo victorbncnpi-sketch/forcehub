@@ -45,7 +45,7 @@ input, textarea { font-family: inherit; }
 .fh-side { display: flex; flex-direction: column; background: #101012; border-right: 1px solid ${T.line}; }
 .fh-main { display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
 .fh-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.fh-page { flex: 1; overflow-y: auto; padding: 24px; }
+.fh-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; }
 .fh-navitem { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-radius: 10px; cursor: pointer; color: ${T.mut}; border: 1px solid transparent; transition: all .15s; }
 .fh-navitem:hover { background: ${T.panel2}; color: ${T.text}; }
 .fh-navitem.active { background: ${T.goldSoft}; color: ${T.gold}; border-color: ${T.lineGold}; }
