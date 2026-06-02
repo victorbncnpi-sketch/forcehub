@@ -4,7 +4,8 @@
 
 import { kv } from "@vercel/kv";
 
-const BRAPI_TOKEN = "dXQ2jkU1g9ZAQRGYpeZ2oP";
+// Token da Brapi via variável de ambiente (não versionar segredos no código).
+const BRAPI_TOKEN = process.env.BRAPI_TOKEN || "";
 
 const ASSETS = [
   { key: "WIN",  ticker: "WINM26" },
@@ -24,6 +25,10 @@ export default async function handler(req, res) {
   const secret = req.headers["x-cron-secret"] || req.query.secret;
   if (secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  if (!BRAPI_TOKEN) {
+    return res.status(503).json({ error: "BRAPI_TOKEN não configurado nas variáveis de ambiente." });
   }
 
   if (!isDiaUtil()) {

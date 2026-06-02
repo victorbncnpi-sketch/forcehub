@@ -18,25 +18,40 @@ function checkExpiry(user) {
   return new Date(user.expiry) >= new Date();
 }
 
+// ─── Persistência local (substitui o window.storage do ambiente de Artifacts) ─
+const storage = {
+  get: (key) => {
+    try { const v = localStorage.getItem(key); return v == null ? null : { value: v }; }
+    catch (e) { return null; }
+  },
+  set: (key, value) => {
+    try { localStorage.setItem(key, value); } catch (e) {}
+  },
+};
+
+// ─── Chamada de IA via proxy serverless (/api/ai) ─────────────────────────────
+// A chave da Anthropic NUNCA fica no frontend — fica no backend (ANTHROPIC_API_KEY).
+async function callAI(body) {
+  const res = await fetch("/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("Falha na IA (HTTP " + res.status + ")"));
+  return data;
+}
+
+// Busca com web_search (calendário econômico, oportunidades). O web_search é uma
+// server tool: a Anthropic executa a busca e devolve o texto final num único turno.
 async function claudeSearch(prompt) {
-  let messages = [{ role: "user", content: prompt }];
-  let finalText = "";
-  for (let turn = 0; turn < 10; turn++) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, tools: [{ type: "web_search_20250305", name: "web_search" }], messages })
-    });
-    if (!res.ok) throw new Error("API " + res.status);
-    const data = await res.json();
-    const texts = (data.content || []).filter(b => b.type === "text");
-    if (texts.length) finalText = texts.map(b => b.text).join("");
-    if (data.stop_reason === "end_turn") break;
-    const toolUses = (data.content || []).filter(b => b.type === "tool_use");
-    if (!toolUses.length) break;
-    messages.push({ role: "assistant", content: data.content });
-    messages.push({ role: "user", content: toolUses.map(tu => ({ type: "tool_result", tool_use_id: tu.id, content: "ok" })) });
-  }
-  return finalText;
+  const data = await callAI({
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 2000,
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+  });
+  const texts = (data.content || []).filter(b => b.type === "text");
+  return texts.map(b => b.text).join("");
 }
 
 function LoginScreen({ onLogin }) {
@@ -152,8 +167,43 @@ function PanoramaScreen({ onBack }) {
   const [news, setNews] = useState(null);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState(null);
+  const [marketLoaded, setMarketLoaded] = useState(false);
   const [time, setTime] = useState(new Date());
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  // Pré-preenche a grade com os dados salvos no backend (Vercel KV). A edição
+  // manual continua disponível; se o backend não estiver configurado, ignora.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/market-data?days=7");
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!active || !j.ok || !j.data) return;
+        setRows(prev => {
+          const next = { ...prev };
+          TICKERS.forEach(tk => {
+            const grid = empty();
+            (j.data[tk] || []).forEach(e => {
+              const wd = new Date(e.date + "T12:00:00").getDay() - 1;
+              if (wd >= 0 && wd <= 4) {
+                grid[wd] = {
+                  weekday: DAYS[wd],
+                  high: e.high != null ? String(e.high) : "",
+                  low: e.low != null ? String(e.low) : "",
+                };
+              }
+            });
+            next[tk] = grid;
+          });
+          return next;
+        });
+        setMarketLoaded(true);
+      } catch (e) { /* mantém entrada manual */ }
+    })();
+    return () => { active = false; };
+  }, []);
 
   const setCell = (ticker, i, field, val) => setRows(prev => {
     const r = prev[ticker].map((row, j) => j === i ? { ...row, [field]: val } : row);
@@ -196,8 +246,9 @@ function PanoramaScreen({ onBack }) {
         else if (text[i] === "}") { depth--; if (depth === 0) { ei = i + 1; break; } }
       }
       // Limpa caracteres problemáticos antes de parsear
-      const raw = text.slice(si, ei)
-        .replace(/[ -]/g, " ") // control chars
+      const raw = Array.from(text.slice(si, ei))
+        .map(c => (c.charCodeAt(0) < 32 ? " " : c)) // remove caracteres de controle
+        .join("")
         .replace(/,\s*([}\]])/g, "$1");           // trailing commas
       setNews(JSON.parse(raw));
     } catch (e) { setNewsError(e.message); }
@@ -213,7 +264,12 @@ function PanoramaScreen({ onBack }) {
           <div style={{ width: 1, height: 24, background: "#222" }} />
           <span style={{ fontSize: 20, fontWeight: "bold", color: "#fbbf24", letterSpacing: 4 }}>PANORAMA DE MERCADO</span>
         </div>
-        <span style={{ fontSize: 14, color: "#444" }}>{time.toLocaleTimeString("pt-BR")}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {marketLoaded
+            ? <span style={{ fontSize: 12, color: "#22c55e", letterSpacing: 1 }}>● DADOS DO MERCADO</span>
+            : <span style={{ fontSize: 12, color: "#555", letterSpacing: 1 }}>○ ENTRADA MANUAL</span>}
+          <span style={{ fontSize: 14, color: "#444" }}>{time.toLocaleTimeString("pt-BR")}</span>
+        </div>
       </div>
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
         {TICKERS.map(ticker => {
@@ -634,8 +690,8 @@ function ConselheiroScreen({ onBack, userId }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const p = await window.storage.get(KEYS.perfil);
-        const d = await window.storage.get(KEYS.diario);
+        const p = await storage.get(KEYS.perfil);
+        const d = await storage.get(KEYS.diario);
         if (p) setPerfil(JSON.parse(p.value));
         if (d) setDiario(JSON.parse(d.value));
       } catch(e) {}
@@ -643,8 +699,8 @@ function ConselheiroScreen({ onBack, userId }) {
     };
     load();
   }, []);
-  const savePerfil = async (p) => { try { await window.storage.set(KEYS.perfil, JSON.stringify(p)); } catch(e) {} setPerfil(p); };
-  const saveDiario = async (entry) => { const novo = [...diario, entry]; try { await window.storage.set(KEYS.diario, JSON.stringify(novo)); } catch(e) {} setDiario(novo); };
+  const savePerfil = async (p) => { try { await storage.set(KEYS.perfil, JSON.stringify(p)); } catch(e) {} setPerfil(p); };
+  const saveDiario = async (entry) => { const novo = [...diario, entry]; try { await storage.set(KEYS.diario, JSON.stringify(novo)); } catch(e) {} setDiario(novo); };
   const hoje = new Date().toLocaleDateString("pt-BR");
   const totalHoje = diario.filter(d => d.data === hoje).reduce((s, d) => s + d.resultado, 0);
   const totalSemana = diario.filter(d => { const dt = new Date(d.data.split("/").reverse().join("-")); const seg = new Date(); seg.setDate(seg.getDate() - seg.getDay() + 1); seg.setHours(0,0,0,0); return dt >= seg; }).reduce((s, d) => s + d.resultado, 0);
@@ -676,8 +732,7 @@ function ConselheiroScreen({ onBack, userId }) {
         const pref = l.includes("índice")||l.includes("indice")||l.includes("win") ? "Índice (WIN)" : l.includes("dólar")||l.includes("dolar")||l.includes("wdo") ? "Dólar (WDO)" : (l.includes("dois")||l.includes("ambos")||l.includes("tudo")) ? "Índice e Dólar" : null;
         if (pref) savePerfil({ ...perfil, preferencia: pref });
       }
-      const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500, system: buildSys(), messages: newMsgs.map(m => ({ role: m.role, content: m.content })) }) });
-      const data = await res.json();
+      const data = await callAI({ max_tokens: 1500, system: buildSys(), messages: newMsgs.map(m => ({ role: m.role, content: m.content })) });
       const text = data.content ? data.content.map(b => b.text || "").join("") : "Erro.";
       const jm = text.match(/\{"action":"save"[^}]+\}/);
       if (jm) { try { const e = JSON.parse(jm[0]); saveDiario({ data: hoje, resultado: e.resultado, dificuldade: e.dificuldade, reflexao: e.reflexao }); } catch(e) {} }
