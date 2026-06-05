@@ -325,7 +325,8 @@ function PanoramaScreen() {
     let active = true;
     (async () => {
       try {
-        const r = await fetch("/api/market-data?days=5");
+        // Pede 10 pregões e usa os últimos 5: garante 5 dias úteis mesmo com feriado na janela.
+        const r = await fetch("/api/market-data?days=10");
         if (!r.ok) return;
         const j = await r.json();
         if (!active || !j.ok || !j.data) return;
