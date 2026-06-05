@@ -254,7 +254,7 @@ function PanoramaScreen() {
     setNewsLoading(true); setNewsError(null);
     try {
       const j = await api.get("/api/news" + (force ? "?refresh=1" : ""));
-      setNews({ summary: j.summary || "", events: Array.isArray(j.events) ? j.events : [], generatedAt: j.generatedAt, stale: j.stale });
+      setNews({ summary: j.summary || "", events: Array.isArray(j.events) ? j.events : [], headlines: Array.isArray(j.headlines) ? j.headlines : [], generatedAt: j.generatedAt, stale: j.stale });
       if (j.ok === false && (!j.events || j.events.length === 0)) setNewsError(j.error || "Não foi possível carregar os eventos agora.");
     } catch (e) { setNewsError(e.message); }
     setNewsLoading(false);
@@ -267,6 +267,8 @@ function PanoramaScreen() {
   const bulls = (n) => "🐂".repeat(Math.min(Math.max(n || 1, 1), 3));
   const impactColor = (n) => (n >= 3 ? T.red : n >= 2 ? T.gold : T.dim);
   const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+  const FLAG = { "Brasil": "🇧🇷", "EUA": "🇺🇸", "Zona do Euro": "🇪🇺", "Reino Unido": "🇬🇧", "China": "🇨🇳", "Japão": "🇯🇵", "Canadá": "🇨🇦", "Austrália": "🇦🇺" };
+  const flagOf = (c) => FLAG[c] || (c === "BR" ? "🇧🇷" : c === "US" ? "🇺🇸" : "🌐");
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -318,12 +320,13 @@ function PanoramaScreen() {
         })}
       </div>
 
+      {/* Mercado hoje: resumo + manchetes */}
       <Card style={{ overflow: "hidden" }}>
         <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderBottom: "1px solid " + T.line, background: T.panel2, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Agenda econômica — hoje</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>📰 Mercado hoje</div>
             <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>
-              Brasil &amp; EUA · impacto 🐂 a 🐂🐂🐂 · atualiza automaticamente
+              Resumo &amp; manchetes · atualiza automaticamente
               {news?.generatedAt ? " · " + fmtTime(news.generatedAt) : ""}
             </div>
           </div>
@@ -332,18 +335,46 @@ function PanoramaScreen() {
           </Button>
         </div>
 
-        {news?.summary && (
-          <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, fontSize: 14, color: T.text, lineHeight: 1.6, display: "flex", gap: 10 }}>
-            <span style={{ fontSize: 16 }}>📰</span><span>{news.summary}</span>
-          </div>
-        )}
-
         {newsLoading && !news && <div style={{ padding: 24, display: "flex", justifyContent: "center" }}><Spinner /></div>}
         {newsError && <div style={{ padding: "14px 18px" }}><Banner tone="red">{newsError}</Banner></div>}
 
+        {news?.summary && (
+          <div style={{ padding: "14px 18px", borderBottom: news?.headlines?.length ? "1px solid " + T.line : "none", fontSize: 14, color: T.text, lineHeight: 1.6 }}>
+            {news.summary}
+          </div>
+        )}
+
+        {news?.headlines?.length > 0 && (
+          <div style={{ padding: "12px 18px", display: "flex", flexDirection: "column", gap: 2 }}>
+            {news.headlines.map((h, i) => {
+              const inner = (
+                <>
+                  <span style={{ color: T.gold, marginRight: 8 }}>›</span>
+                  <span style={{ color: T.text }}>{h.title}</span>
+                  {h.source && <span style={{ color: T.dim, marginLeft: 8, fontSize: 12 }}>· {h.source}</span>}
+                </>
+              );
+              return h.url
+                ? <a key={i} href={h.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, lineHeight: 1.7, textDecoration: "none", display: "block" }}>{inner}</a>
+                : <div key={i} style={{ fontSize: 14, lineHeight: 1.7 }}>{inner}</div>;
+            })}
+          </div>
+        )}
+
+        {news && !news.summary && (!news.headlines || news.headlines.length === 0) && !newsLoading && !newsError && (
+          <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Sem manchetes no momento.</div>
+        )}
+      </Card>
+
+      {/* Agenda econômica */}
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Agenda econômica — hoje</div>
+          <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Brasil, EUA e principais economias · impacto 🐂 a 🐂🐂🐂</div>
+        </div>
         {news && news.events && (
           news.events.length === 0
-            ? <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum evento relevante encontrado para hoje.</div>
+            ? <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum evento na agenda de hoje.</div>
             : (
               <div className="fh-scroll-x" style={{ padding: 14 }}>
                 <div style={{ minWidth: 600, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -353,7 +384,7 @@ function PanoramaScreen() {
                   {news.events.map((n, i) => (
                     <div key={i} style={{ display: "grid", gridTemplateColumns: "58px 40px 1fr 84px 84px 84px", gap: 10, alignItems: "center", padding: "11px 14px", background: T.inset, border: "1px solid " + T.line, borderLeft: "3px solid " + impactColor(n.impact), borderRadius: 10 }}>
                       <div style={{ fontSize: 14, color: T.gold, fontWeight: 700, fontFamily: T.mono }}>{n.time || "—"}</div>
-                      <div style={{ fontSize: 22, textAlign: "center" }}>{(n.country === "Brasil" || n.country === "BR") ? "🇧🇷" : "🇺🇸"}</div>
+                      <div style={{ fontSize: 22, textAlign: "center" }} title={n.country}>{flagOf(n.country)}</div>
                       <div>
                         <div style={{ fontSize: 14, color: T.text }}>{n.title}</div>
                         <div style={{ fontSize: 11, marginTop: 2, color: impactColor(n.impact) }}>{bulls(n.impact)}</div>

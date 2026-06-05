@@ -11,7 +11,7 @@ import { geminiText, extractJSON } from "./_ai";
 
 const TTL_MIN = 15;
 const FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
-const COUNTRIES = { USD: "EUA", BRL: "Brasil" };
+const COUNTRIES = { USD: "EUA", BRL: "Brasil", EUR: "Zona do Euro", GBP: "Reino Unido", CNY: "China", JPY: "Japão", CAD: "Canadá", AUD: "Austrália" };
 const IMPACT = { High: 3, Medium: 2, Low: 1, Holiday: 1 };
 
 export default async function handler(req, res) {
@@ -46,14 +46,19 @@ export default async function handler(req, res) {
 async function generate(today, todayBRT) {
   let events = [];
   let source = "forexfactory";
-  try { events = await fetchForexFactory(todayBRT); }
-  catch (e) { /* tenta fallback via IA abaixo */ }
 
-  // Resumo do dia via IA (não bloqueia: se falhar, segue sem resumo).
-  let summary = "";
-  try { summary = (await briefSummary(today)).trim(); } catch (e) {}
+  // Busca em paralelo: agenda (feed) + resumo (IA) + manchetes (IA).
+  const [evtRes, sumRes, headRes] = await Promise.allSettled([
+    fetchForexFactory(todayBRT),
+    briefSummary(today),
+    fetchHeadlines(today),
+  ]);
 
-  // Fallback: se o feed não trouxe eventos, gera a agenda pela IA (como antes).
+  if (evtRes.status === "fulfilled") events = evtRes.value;
+  let summary = sumRes.status === "fulfilled" ? String(sumRes.value || "").trim() : "";
+  const headlines = headRes.status === "fulfilled" ? headRes.value : [];
+
+  // Fallback: se o feed não trouxe eventos, gera a agenda pela IA.
   if (!events.length) {
     try {
       const g = await aiEvents(today);
@@ -61,10 +66,10 @@ async function generate(today, todayBRT) {
       if (!summary) summary = g.summary;
       source = "gemini";
     } catch (e) {
-      if (!summary) throw e; // sem eventos e sem resumo -> erro real
+      if (!summary && !headlines.length) throw e;
     }
   }
-  return { summary, events, source };
+  return { summary, events, headlines, source };
 }
 
 // ─── ForexFactory (feed gratuito, estruturado) ───────────────────────────────
@@ -100,6 +105,22 @@ async function briefSummary(today) {
   const prompt = "Hoje e " + today + ". Em 1 a 2 frases, resuma o que move os mercados de Brasil e EUA hoje " +
     "(principais eventos/indicadores e o sentimento geral). Responda em portugues, texto puro, sem markdown.";
   return geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 300, temperature: 0.3 });
+}
+
+// ─── IA: manchetes do mercado ────────────────────────────────────────────────
+async function fetchHeadlines(today) {
+  const prompt = "Hoje e " + today + ". Use a busca na web. Liste as principais MANCHETES do mercado financeiro de hoje " +
+    "(Brasil e global): bolsa/Ibovespa, juros, cambio/dolar, commodities, empresas e economia. " +
+    'Responda SOMENTE JSON valido (sem markdown): {"headlines":[{"title":"...","source":"..."}]}. ' +
+    "De 6 a 10 manchetes objetivas e atuais, em portugues.";
+  const text = await geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 1200, temperature: 0.3 });
+  const parsed = extractJSON(text, ['"headlines"']);
+  if (!parsed) return [];
+  const v = parsed.value || {};
+  return (Array.isArray(v.headlines) ? v.headlines : [])
+    .map(h => ({ title: String(h.title || "").trim(), source: String(h.source || "").trim(), url: String(h.url || "").trim() }))
+    .filter(h => h.title)
+    .slice(0, 10);
 }
 
 // ─── IA: agenda completa (fallback se o feed falhar) ─────────────────────────
