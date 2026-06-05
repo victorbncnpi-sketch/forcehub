@@ -306,51 +306,47 @@ function NewsPanel({ news, loading, error, refreshing, onRefresh }) {
 
 // ─── Panorama de Mercado ────────────────────────────────────────────────────────
 function PanoramaScreen() {
-  const DAYS = ["Seg", "Ter", "Qua", "Qui", "Sex"];
   const TICKERS = ["WIN", "WDO", "IBOV"];
   const LABELS = { WIN: "Mini Índice", WDO: "Mini Dólar", IBOV: "Ibovespa" };
-  const empty = () => DAYS.map(d => ({ weekday: d, high: "", low: "" }));
+  const toISO = (d) => { const x = new Date(d); x.setHours(12, 0, 0, 0); return x.toISOString().split("T")[0]; };
+  const ddmm = (iso) => { const p = String(iso).split("-"); return p.length === 3 ? p[2] + "/" + p[1] : iso; };
+  const bizDays = (n) => { const out = []; const d = new Date(); d.setHours(12, 0, 0, 0); while (out.length < n) { const wd = d.getDay(); if (wd >= 1 && wd <= 5) out.unshift(toISO(d)); d.setDate(d.getDate() - 1); } return out; };
+  const empty = () => bizDays(5).map(iso => ({ date: iso, label: ddmm(iso), high: "", low: "" }));
+  const todayISO = toISO(new Date());
   const [rows, setRows] = useState({ WIN: empty(), WDO: empty(), IBOV: empty() });
   const [news, setNews] = useState(null);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState(null);
   const [marketLoaded, setMarketLoaded] = useState(false);
   const [loadingMarket, setLoadingMarket] = useState(true);
-  const [marketErrors, setMarketErrors] = useState([]);
+  const [manualTickers, setManualTickers] = useState([]);
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const r = await fetch("/api/market-data?days=7");
+        const r = await fetch("/api/market-data?days=5");
         if (!r.ok) return;
         const j = await r.json();
         if (!active || !j.ok || !j.data) return;
         let any = false;
-        // Início da semana corrente (segunda-feira), para ignorar barras antigas.
-        const weekStart = new Date();
-        weekStart.setHours(0, 0, 0, 0);
-        weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+        const manual = [];
         setRows(prev => {
           const next = { ...prev };
           TICKERS.forEach(tk => {
-            const grid = empty();
             const fmtIn = (v) => v == null ? "" : (tk === "WDO" ? Number(v).toFixed(1) : String(Math.round(Number(v))));
-            (j.data[tk] || []).forEach(e => {
-              const d = new Date(e.date + "T12:00:00");
-              if (d < weekStart) return; // só a semana atual (evita feriado/semana passada)
-              const wd = d.getDay() - 1;
-              if (wd >= 0 && wd <= 4) {
-                any = true;
-                grid[wd] = { weekday: DAYS[wd], high: fmtIn(e.high), low: fmtIn(e.low) };
-              }
-            });
-            next[tk] = grid;
+            const bars = (j.data[tk] || []).slice(-5);
+            if (bars.length) {
+              any = true;
+              next[tk] = bars.map(e => ({ date: e.date, label: ddmm(e.date), high: fmtIn(e.high), low: fmtIn(e.low) }));
+            } else {
+              manual.push(tk);
+            }
           });
           return next;
         });
         if (any) setMarketLoaded(true);
-        if (Array.isArray(j.errors) && j.errors.length) setMarketErrors(j.errors);
+        setManualTickers(manual);
       } catch (e) { /* mantém entrada manual */ }
       finally { if (active) setLoadingMarket(false); }
     })();
@@ -394,7 +390,6 @@ function PanoramaScreen() {
   useEffect(() => { loadNews(false); }, []);
 
   const cInput = (color) => ({ textAlign: "center", padding: "6px 4px", fontSize: 12, color, borderColor: color + "44" });
-  const todayIdx = new Date().getDay() - 1;
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -404,9 +399,9 @@ function PanoramaScreen() {
           ? <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: T.mut }}><Spinner size={14} /> Carregando cotações...</span>
           : marketLoaded ? <Badge tone="green">● DADOS DO MERCADO</Badge> : <Badge tone="mut">○ ENTRADA MANUAL</Badge>}
       </div>
-      {!loadingMarket && marketErrors.length > 0 && (
+      {!loadingMarket && manualTickers.length > 0 && (
         <div style={{ fontSize: 11, color: T.dim, marginTop: -8 }}>
-          ⓘ Fonte indisponível para {marketErrors.map(e => e.ticker).join(", ")} — usando entrada manual nesses ativos.
+          ⓘ Sem cotação automática para {manualTickers.join(", ")} — preencha manualmente.
         </div>
       )}
 
@@ -423,16 +418,16 @@ function PanoramaScreen() {
                   <div style={{ fontSize: 15, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{avg != null ? fmtV(ticker, avg) : "—"}</div>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "34px 1fr 1fr 62px", gap: 8, padding: "6px 12px", borderBottom: "1px solid " + T.line }}>
-                {["DIA", "MÁX", "MÍN", "AMPL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k === 3 ? "right" : "left" }}>{h}</div>)}
+              <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 1fr 62px", gap: 8, padding: "6px 12px", borderBottom: "1px solid " + T.line }}>
+                {["DATA", "MÁX", "MÍN", "AMPL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k === 3 ? "right" : "left" }}>{h}</div>)}
               </div>
               {rows[ticker].map((row, i) => {
                 const amp = getAmp(row);
                 const ac = ampColor(amp, avg);
-                const isToday = todayIdx === i;
+                const isToday = row.date === todayISO;
                 return (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "34px 1fr 1fr 62px", alignItems: "center", gap: 8, padding: "5px 12px", borderBottom: i < 4 ? "1px solid " + T.line : "none", background: isToday ? T.goldSoft : "transparent" }}>
-                    <span style={{ fontSize: 12, color: isToday ? T.gold : T.mut, fontWeight: isToday ? 700 : 400 }}>{row.weekday}</span>
+                  <div key={row.date || i} style={{ display: "grid", gridTemplateColumns: "48px 1fr 1fr 62px", alignItems: "center", gap: 8, padding: "5px 12px", borderBottom: i < rows[ticker].length - 1 ? "1px solid " + T.line : "none", background: isToday ? T.goldSoft : "transparent" }}>
+                    <span style={{ fontSize: 12, color: isToday ? T.gold : T.mut, fontWeight: isToday ? 700 : 400, fontFamily: T.mono }}>{row.label}</span>
                     <Input mono value={row.high} onChange={e => setCell(ticker, i, "high", e.target.value)} placeholder={ticker === "WDO" ? "0.0" : "000000"} style={cInput(T.blue)} />
                     <Input mono value={row.low} onChange={e => setCell(ticker, i, "low", e.target.value)} placeholder={ticker === "WDO" ? "0.0" : "000000"} style={cInput(T.purple)} />
                     <div style={{ textAlign: "right", fontFamily: T.mono }}>

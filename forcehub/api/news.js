@@ -102,9 +102,10 @@ async function fetchForexFactory(todayBRT) {
 
 // ─── IA: resumo do dia ───────────────────────────────────────────────────────
 async function briefSummary(today) {
-  const prompt = "Hoje e " + today + ". Em 1 a 2 frases, resuma o que move os mercados de Brasil e EUA hoje " +
-    "(principais eventos/indicadores e o sentimento geral). Responda em portugues, texto puro, sem markdown.";
-  return geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 300, temperature: 0.3 });
+  const prompt = "Hoje e " + today + ". Em 2 a 3 frases COMPLETAS, resuma o que move os mercados de Brasil e EUA hoje " +
+    "(principais eventos/indicadores, juros, cambio e o sentimento geral). Responda em portugues, texto puro (sem markdown), " +
+    "terminando as frases — nao corte no meio.";
+  return geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 700, temperature: 0.3 });
 }
 
 // ─── IA: manchetes do mercado ────────────────────────────────────────────────
