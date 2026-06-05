@@ -59,6 +59,8 @@ input, textarea { font-family: inherit; }
 .fh-input { width: 100%; background: ${T.inset}; border: 1px solid ${T.line}; border-radius: 8px; padding: 11px 13px; color: ${T.text}; font-size: 14px; outline: none; transition: border-color .15s; }
 .fh-input:focus { border-color: ${T.gold}; }
 .fh-card { background: ${T.panel}; border: 1px solid ${T.line}; border-radius: 14px; }
+.fh-news-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 960px) { .fh-news-grid { grid-template-columns: 1fr; } }
 
 @media (max-width: 860px) {
   .fh-shell { grid-template-columns: 64px 1fr; }

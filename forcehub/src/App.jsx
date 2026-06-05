@@ -93,6 +93,13 @@ async function aiSearchJSON(prompt, anchors, attempts = 2) {
   throw lastErr;
 }
 
+// ─── Helpers de agenda / notícias ─────────────────────────────────────────────
+const FLAG = { "Brasil": "🇧🇷", "EUA": "🇺🇸", "Zona do Euro": "🇪🇺", "Reino Unido": "🇬🇧", "China": "🇨🇳", "Japão": "🇯🇵", "Canadá": "🇨🇦", "Austrália": "🇦🇺" };
+const flagOf = (c) => FLAG[c] || (c === "BR" ? "🇧🇷" : c === "US" ? "🇺🇸" : "🌐");
+const bulls = (n) => "🐂".repeat(Math.min(Math.max(n || 1, 1), 3));
+const impactColor = (n) => (n >= 3 ? T.red : n >= 2 ? T.gold : T.dim);
+const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+
 // ─── Login ────────────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
   const [user, setUser] = useState(""); const [pass, setPass] = useState("");
@@ -176,6 +183,124 @@ function Shell({ session, active, onNavigate, onLogout, children }) {
         <div className="fh-body">{children}</div>
       </div>
     </div>
+  );
+}
+
+// ─── Painel de Agenda econômica (com filtros e agrupamento) ───────────────────
+function AgendaPanel({ events, loading }) {
+  const [excluded, setExcluded] = useState([]);
+  const [impacts, setImpacts] = useState({ 3: true, 2: true, 1: true });
+  const [grouped, setGrouped] = useState(false);
+  const countriesAll = Array.from(new Set(events.map(e => e.country)));
+  const toggleCountry = (c) => setExcluded(x => x.includes(c) ? x.filter(v => v !== c) : [...x, c]);
+  const toggleImpact = (k) => setImpacts(m => ({ ...m, [k]: !m[k] }));
+  const filtered = events.filter(e => impacts[e.impact] && !excluded.includes(e.country));
+
+  const COLS = "52px 32px 1fr 70px 70px 70px";
+  const chipStyle = (active, tone = T.gold) => ({ fontSize: 12, padding: "5px 10px", borderRadius: 8, border: "1px solid " + (active ? tone + "66" : T.line), background: active ? tone + "1a" : "transparent", color: active ? tone : T.mut });
+
+  const renderRow = (n, i) => (
+    <div key={i} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, alignItems: "center", padding: "10px 12px", background: T.inset, border: "1px solid " + T.line, borderLeft: "3px solid " + impactColor(n.impact), borderRadius: 10 }}>
+      <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, fontFamily: T.mono }}>{n.time || "—"}</div>
+      <div style={{ fontSize: 19, textAlign: "center" }} title={n.country}>{flagOf(n.country)}</div>
+      <div>
+        <div style={{ fontSize: 13, color: T.text }}>{n.title}</div>
+        <div style={{ fontSize: 10, marginTop: 2, color: impactColor(n.impact) }}>{bulls(n.impact)}</div>
+      </div>
+      <div style={{ textAlign: "right", fontSize: 12, color: T.mut, fontFamily: T.mono }}>{n.previous || "—"}</div>
+      <div style={{ textAlign: "right", fontSize: 12, color: T.gold, fontFamily: T.mono }}>{n.forecast || "—"}</div>
+      <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: n.actual ? T.green : T.dim, fontFamily: T.mono }}>{n.actual || "—"}</div>
+    </div>
+  );
+
+  return (
+    <Card style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Agenda econômica — hoje</div>
+        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>{filtered.length} de {events.length} eventos · impacto 🐂 a 🐂🐂🐂</div>
+      </div>
+
+      {events.length > 0 && (
+        <div style={{ padding: "12px 14px", borderBottom: "1px solid " + T.line, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            {countriesAll.map(c => (
+              <button key={c} className="fh-btn" onClick={() => toggleCountry(c)} style={chipStyle(!excluded.includes(c))}>{flagOf(c)} {c}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[3, 2, 1].map(k => (
+                <button key={k} className="fh-btn" onClick={() => toggleImpact(k)} style={chipStyle(impacts[k], impactColor(k))}>{bulls(k)}</button>
+              ))}
+            </div>
+            <button className="fh-btn" onClick={() => setGrouped(g => !g)} style={chipStyle(grouped)}>⊞ Agrupar por país</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <Loading label="Carregando agenda..." />
+        : filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum evento com os filtros atuais.</div>
+        : (
+          <div className="fh-scroll-x" style={{ padding: 12 }}>
+            <div style={{ minWidth: 460, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "0 12px" }}>
+                {["HORA", "PAÍS", "EVENTO", "ANT.", "PREV.", "ATUAL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k > 2 ? "right" : "left" }}>{h}</div>)}
+              </div>
+              {grouped
+                ? countriesAll.filter(c => !excluded.includes(c)).map(c => {
+                    const evs = filtered.filter(e => e.country === c);
+                    if (!evs.length) return null;
+                    return (
+                      <div key={c} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", marginTop: 4 }}>
+                          <span style={{ fontSize: 18 }}>{flagOf(c)}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{c}</span>
+                          <span style={{ fontSize: 11, color: T.dim }}>· {evs.length}</span>
+                        </div>
+                        {evs.map((n, i) => renderRow(n, c + i))}
+                      </div>
+                    );
+                  })
+                : filtered.map((n, i) => renderRow(n, i))}
+            </div>
+          </div>
+        )}
+    </Card>
+  );
+}
+
+// ─── Painel de Notícias (resumo + manchetes) ──────────────────────────────────
+function NewsPanel({ news, loading, error, refreshing, onRefresh }) {
+  return (
+    <Card style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderBottom: "1px solid " + T.line, background: T.panel2, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>📰 Mercado hoje</div>
+          <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Resumo &amp; manchetes{news?.generatedAt ? " · " + fmtTime(news.generatedAt) : ""}</div>
+        </div>
+        <Button variant="gold" size="sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? "⟳ Atualizando..." : "↻ Atualizar"}</Button>
+      </div>
+
+      {loading && <div style={{ padding: 24, display: "flex", justifyContent: "center" }}><Spinner /></div>}
+      {error && <div style={{ padding: "14px 18px" }}><Banner tone="red">{error}</Banner></div>}
+
+      {news?.summary && (
+        <div style={{ padding: "14px 18px", borderBottom: news?.headlines?.length ? "1px solid " + T.line : "none", fontSize: 14, color: T.text, lineHeight: 1.6 }}>{news.summary}</div>
+      )}
+      {news?.headlines?.length > 0 && (
+        <div style={{ padding: "12px 18px", display: "flex", flexDirection: "column", gap: 4 }}>
+          {news.headlines.map((h, i) => {
+            const inner = (<><span style={{ color: T.gold, marginRight: 8 }}>›</span><span style={{ color: T.text }}>{h.title}</span>{h.source && <span style={{ color: T.dim, marginLeft: 8, fontSize: 12 }}>· {h.source}</span>}</>);
+            return h.url
+              ? <a key={i} href={h.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, lineHeight: 1.7, textDecoration: "none", display: "block" }}>{inner}</a>
+              : <div key={i} style={{ fontSize: 14, lineHeight: 1.7 }}>{inner}</div>;
+          })}
+        </div>
+      )}
+      {news && !news.summary && (!news.headlines || news.headlines.length === 0) && !loading && !error && (
+        <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Sem manchetes no momento.</div>
+      )}
+    </Card>
   );
 }
 
@@ -264,11 +389,6 @@ function PanoramaScreen() {
 
   const cInput = (color) => ({ textAlign: "center", padding: "6px 4px", fontSize: 12, color, borderColor: color + "44" });
   const todayIdx = new Date().getDay() - 1;
-  const bulls = (n) => "🐂".repeat(Math.min(Math.max(n || 1, 1), 3));
-  const impactColor = (n) => (n >= 3 ? T.red : n >= 2 ? T.gold : T.dim);
-  const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
-  const FLAG = { "Brasil": "🇧🇷", "EUA": "🇺🇸", "Zona do Euro": "🇪🇺", "Reino Unido": "🇬🇧", "China": "🇨🇳", "Japão": "🇯🇵", "Canadá": "🇨🇦", "Austrália": "🇦🇺" };
-  const flagOf = (c) => FLAG[c] || (c === "BR" ? "🇧🇷" : c === "US" ? "🇺🇸" : "🌐");
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -320,85 +440,11 @@ function PanoramaScreen() {
         })}
       </div>
 
-      {/* Mercado hoje: resumo + manchetes */}
-      <Card style={{ overflow: "hidden" }}>
-        <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderBottom: "1px solid " + T.line, background: T.panel2, flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>📰 Mercado hoje</div>
-            <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>
-              Resumo &amp; manchetes · atualiza automaticamente
-              {news?.generatedAt ? " · " + fmtTime(news.generatedAt) : ""}
-            </div>
-          </div>
-          <Button variant="gold" size="sm" onClick={() => loadNews(true)} disabled={newsLoading}>
-            {newsLoading ? "⟳ Atualizando..." : "↻ Atualizar"}
-          </Button>
-        </div>
-
-        {newsLoading && !news && <div style={{ padding: 24, display: "flex", justifyContent: "center" }}><Spinner /></div>}
-        {newsError && <div style={{ padding: "14px 18px" }}><Banner tone="red">{newsError}</Banner></div>}
-
-        {news?.summary && (
-          <div style={{ padding: "14px 18px", borderBottom: news?.headlines?.length ? "1px solid " + T.line : "none", fontSize: 14, color: T.text, lineHeight: 1.6 }}>
-            {news.summary}
-          </div>
-        )}
-
-        {news?.headlines?.length > 0 && (
-          <div style={{ padding: "12px 18px", display: "flex", flexDirection: "column", gap: 2 }}>
-            {news.headlines.map((h, i) => {
-              const inner = (
-                <>
-                  <span style={{ color: T.gold, marginRight: 8 }}>›</span>
-                  <span style={{ color: T.text }}>{h.title}</span>
-                  {h.source && <span style={{ color: T.dim, marginLeft: 8, fontSize: 12 }}>· {h.source}</span>}
-                </>
-              );
-              return h.url
-                ? <a key={i} href={h.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, lineHeight: 1.7, textDecoration: "none", display: "block" }}>{inner}</a>
-                : <div key={i} style={{ fontSize: 14, lineHeight: 1.7 }}>{inner}</div>;
-            })}
-          </div>
-        )}
-
-        {news && !news.summary && (!news.headlines || news.headlines.length === 0) && !newsLoading && !newsError && (
-          <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Sem manchetes no momento.</div>
-        )}
-      </Card>
-
-      {/* Agenda econômica */}
-      <Card style={{ overflow: "hidden" }}>
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Agenda econômica — hoje</div>
-          <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Brasil, EUA e principais economias · impacto 🐂 a 🐂🐂🐂</div>
-        </div>
-        {news && news.events && (
-          news.events.length === 0
-            ? <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum evento na agenda de hoje.</div>
-            : (
-              <div className="fh-scroll-x" style={{ padding: 14 }}>
-                <div style={{ minWidth: 600, display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "58px 40px 1fr 84px 84px 84px", gap: 10, padding: "0 14px" }}>
-                    {["HORA", "PAÍS", "EVENTO", "ANTERIOR", "PREVISÃO", "ATUAL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.5, textAlign: k > 2 ? "right" : "left" }}>{h}</div>)}
-                  </div>
-                  {news.events.map((n, i) => (
-                    <div key={i} style={{ display: "grid", gridTemplateColumns: "58px 40px 1fr 84px 84px 84px", gap: 10, alignItems: "center", padding: "11px 14px", background: T.inset, border: "1px solid " + T.line, borderLeft: "3px solid " + impactColor(n.impact), borderRadius: 10 }}>
-                      <div style={{ fontSize: 14, color: T.gold, fontWeight: 700, fontFamily: T.mono }}>{n.time || "—"}</div>
-                      <div style={{ fontSize: 22, textAlign: "center" }} title={n.country}>{flagOf(n.country)}</div>
-                      <div>
-                        <div style={{ fontSize: 14, color: T.text }}>{n.title}</div>
-                        <div style={{ fontSize: 11, marginTop: 2, color: impactColor(n.impact) }}>{bulls(n.impact)}</div>
-                      </div>
-                      <div style={{ textAlign: "right", fontSize: 13, color: T.mut, fontFamily: T.mono }}>{n.previous || "—"}</div>
-                      <div style={{ textAlign: "right", fontSize: 13, color: T.gold, fontFamily: T.mono }}>{n.forecast || "—"}</div>
-                      <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: n.actual ? T.green : T.dim, fontFamily: T.mono }}>{n.actual || "—"}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-        )}
-      </Card>
+      {/* Indicadores (agenda) + Notícias em duas colunas */}
+      <div className="fh-news-grid">
+        <AgendaPanel events={news?.events || []} loading={newsLoading && !news} />
+        <NewsPanel news={news} loading={newsLoading && !news} error={newsError} refreshing={newsLoading} onRefresh={() => loadNews(true)} />
+      </div>
     </div>
   );
 }
