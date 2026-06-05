@@ -39,13 +39,17 @@ export function extractJSON(text, anchors = []) {
 }
 
 // Geração de texto via Gemini (com Google Search opcional).
-export async function geminiText({ messages, system, search = false, maxTokens = 1500, temperature = 0.4 }) {
+// thinkingBudget=0 desliga o "thinking" do gemini-2.5-flash: sem isso, os tokens
+// de raciocínio consomem o maxOutputTokens e a resposta visível sai cortada
+// (resumo truncado / JSON de manchetes incompleto). Para tarefas estruturadas
+// e curtas, mantemos o thinking desligado por padrão.
+export async function geminiText({ messages, system, search = false, maxTokens = 1500, temperature = 0.4, thinkingBudget = 0 }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("IA não configurada (defina GEMINI_API_KEY).");
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   const payload = {
     contents: messages.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: String(m.content ?? "") }] })),
-    generationConfig: { maxOutputTokens: maxTokens, temperature },
+    generationConfig: { maxOutputTokens: maxTokens, temperature, thinkingConfig: { thinkingBudget } },
   };
   if (system) payload.systemInstruction = { parts: [{ text: system }] };
   if (search) payload.tools = [{ google_search: {} }];

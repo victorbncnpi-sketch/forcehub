@@ -102,26 +102,26 @@ async function fetchForexFactory(todayBRT) {
 
 // ─── IA: resumo do dia ───────────────────────────────────────────────────────
 async function briefSummary(today) {
-  const prompt = "Hoje e " + today + ". Em 2 a 3 frases COMPLETAS, resuma o que move os mercados de Brasil e EUA hoje " +
-    "(principais eventos/indicadores, juros, cambio e o sentimento geral). Responda em portugues, texto puro (sem markdown), " +
-    "terminando as frases — nao corte no meio.";
-  return geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 700, temperature: 0.3 });
+  const prompt = "Hoje e " + today + ". Use a busca na web. Em 3 a 4 frases COMPLETAS, resuma o que move os mercados de Brasil e EUA hoje: " +
+    "principais eventos/indicadores do dia, juros, cambio (dolar/real), commodities e o sentimento geral (risk-on/risk-off). " +
+    "Responda em portugues, texto puro (sem markdown), terminando todas as frases — nao corte no meio.";
+  return geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 900, temperature: 0.3 });
 }
 
 // ─── IA: manchetes do mercado ────────────────────────────────────────────────
 async function fetchHeadlines(today) {
   const prompt = "Hoje e " + today + ". Use a busca na web. Liste as principais MANCHETES do mercado financeiro de hoje " +
-    "(Brasil e global): bolsa/Ibovespa, juros, cambio/dolar, commodities, empresas e economia. " +
+    "(Brasil e global): bolsa/Ibovespa, juros (Selic/Fed), cambio/dolar, commodities, empresas e economia. " +
     'Responda SOMENTE JSON valido (sem markdown): {"headlines":[{"title":"...","source":"..."}]}. ' +
-    "De 6 a 10 manchetes objetivas e atuais, em portugues.";
-  const text = await geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 1200, temperature: 0.3 });
+    "De 8 a 12 manchetes objetivas e atuais, em portugues, sem repetir o mesmo assunto.";
+  const text = await geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 1500, temperature: 0.3 });
   const parsed = extractJSON(text, ['"headlines"']);
   if (!parsed) return [];
   const v = parsed.value || {};
   return (Array.isArray(v.headlines) ? v.headlines : [])
     .map(h => ({ title: String(h.title || "").trim(), source: String(h.source || "").trim(), url: String(h.url || "").trim() }))
     .filter(h => h.title)
-    .slice(0, 10);
+    .slice(0, 12);
 }
 
 // ─── IA: agenda completa (fallback se o feed falhar) ─────────────────────────

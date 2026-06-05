@@ -91,7 +91,9 @@ async function viaGemini({ res, messages, system, maxTokens, wantsSearch }) {
       role: m.role === "assistant" ? "model" : "user",
       parts: geminiParts(m.content),
     })),
-    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
+    // thinkingBudget=0: sem isso o "thinking" do gemini-2.5-flash consome o
+    // maxOutputTokens e a resposta do Conselheiro pode sair cortada.
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4, thinkingConfig: { thinkingBudget: 0 } },
   };
   if (system) payload.systemInstruction = { parts: [{ text: system }] };
   if (wantsSearch) payload.tools = [{ google_search: {} }];
