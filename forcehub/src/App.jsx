@@ -327,13 +327,19 @@ function PanoramaScreen() {
         const j = await r.json();
         if (!active || !j.ok || !j.data) return;
         let any = false;
+        // Início da semana corrente (segunda-feira), para ignorar barras antigas.
+        const weekStart = new Date();
+        weekStart.setHours(0, 0, 0, 0);
+        weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
         setRows(prev => {
           const next = { ...prev };
           TICKERS.forEach(tk => {
             const grid = empty();
             const fmtIn = (v) => v == null ? "" : (tk === "WDO" ? Number(v).toFixed(1) : String(Math.round(Number(v))));
             (j.data[tk] || []).forEach(e => {
-              const wd = new Date(e.date + "T12:00:00").getDay() - 1;
+              const d = new Date(e.date + "T12:00:00");
+              if (d < weekStart) return; // só a semana atual (evita feriado/semana passada)
+              const wd = d.getDay() - 1;
               if (wd >= 0 && wd <= 4) {
                 any = true;
                 grid[wd] = { weekday: DAYS[wd], high: fmtIn(e.high), low: fmtIn(e.low) };
