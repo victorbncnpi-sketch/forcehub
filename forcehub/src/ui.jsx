@@ -204,6 +204,30 @@ export function Dots() {
   );
 }
 
+// ─── Ícones SVG (estilo linha, herdam a cor via currentColor) ─────────────────
+const ICON_PATHS = {
+  panorama: <><line x1="4" y1="20" x2="4" y2="4" /><line x1="4" y1="20" x2="20" y2="20" /><rect x="8" y="11" width="3.4" height="6" /><rect x="14" y="7" width="3.4" height="10" /></>,
+  carteira: <><polyline points="3 16 9 10 13 14 21 6" /><polyline points="15 6 21 6 21 12" /></>,
+  conselheiro: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.4" /></>,
+  news: <><rect x="3" y="5" width="14" height="15" rx="2" /><path d="M17 8h4v10a2 2 0 0 1-2 2H6" /><line x1="6" y1="9" x2="13" y2="9" /><line x1="6" y1="13" x2="13" y2="13" /><line x1="6" y1="16" x2="10" y2="16" /></>,
+  search: <><circle cx="11" cy="11" r="7" /><line x1="16.5" y1="16.5" x2="21" y2="21" /></>,
+  attach: <path d="M20.5 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3 3 0 0 1 4.3 4.3l-8.7 8.7a1.4 1.4 0 0 1-2-2l7.9-7.9" />,
+  journal: <><path d="M6 4h10a2 2 0 0 1 2 2v14H8a2 2 0 0 1-2-2z" /><line x1="10" y1="4" x2="10" y2="20" /></>,
+  send: <><line x1="12" y1="20" x2="12" y2="5" /><polyline points="6 11 12 5 18 11" /></>,
+  list: <><line x1="9" y1="7" x2="20" y2="7" /><line x1="9" y1="12" x2="20" y2="12" /><line x1="9" y1="17" x2="20" y2="17" /><circle cx="5" cy="7" r="1.1" /><circle cx="5" cy="12" r="1.1" /><circle cx="5" cy="17" r="1.1" /></>,
+  positions: <><line x1="4" y1="20" x2="4" y2="4" /><line x1="4" y1="20" x2="20" y2="20" /><polyline points="7 15 11 11 14 13 19 7" /></>,
+};
+
+export function Icon({ name, size = 18, color, style }) {
+  const children = ICON_PATHS[name];
+  if (!children) return null;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color || "currentColor"} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block", flexShrink: 0, ...style }}>
+      {children}
+    </svg>
+  );
+}
+
 export function Spinner({ size = 18 }) {
   return <span style={{ display: "inline-block", width: size, height: size, border: "2px solid " + T.line, borderTopColor: T.gold, borderRadius: "50%", animation: "fh-spin .7s linear infinite", flexShrink: 0 }} />;
 }

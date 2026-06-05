@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading } from "./ui";
+import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
 
 // ─── USUÁRIOS — adicione clientes aqui ───────────────────────────────────────
 // role: "admin" = acesso total | "client" = só visualiza carteira publicada
@@ -141,9 +141,9 @@ function LoginScreen({ onLogin }) {
 
 // ─── Shell com navegação lateral ──────────────────────────────────────────────
 const NAV = [
-  { key: "panorama",    icon: "📊", label: "Panorama",    title: "Panorama de Mercado" },
-  { key: "carteira",    icon: "📈", label: "Carteira",    title: "Carteira Recomendada" },
-  { key: "conselheiro", icon: "🎯", label: "Conselheiro", title: "O Conselheiro" },
+  { key: "panorama",    icon: "panorama",    label: "Panorama",    title: "Panorama de Mercado" },
+  { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada" },
+  { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro" },
 ];
 
 function Shell({ session, active, onNavigate, onLogout, children }) {
@@ -160,7 +160,7 @@ function Shell({ session, active, onNavigate, onLogout, children }) {
             <div key={n.key} className={"fh-navitem" + (active === n.key ? " active" : "")} onClick={() => onNavigate(n.key)}
               role="button" tabIndex={0} aria-current={active === n.key} title={n.label}
               onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate(n.key); } }}>
-              <span style={{ fontSize: 17 }}>{n.icon}</span>
+              <Icon name={n.icon} size={19} />
               <span className="fh-nav-label" style={{ fontSize: 14, fontWeight: 600 }}>{n.label}</span>
             </div>
           ))}
@@ -275,7 +275,7 @@ function NewsPanel({ news, loading, error, refreshing, onRefresh }) {
     <Card style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderBottom: "1px solid " + T.line, background: T.panel2, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>📰 Mercado hoje</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text, display: "flex", alignItems: "center", gap: 8 }}><Icon name="news" size={16} /> Mercado hoje</div>
           <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Resumo &amp; manchetes{news?.generatedAt ? " · " + fmtTime(news.generatedAt) : ""}</div>
         </div>
         <Button variant="gold" size="sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? "⟳ Atualizando..." : "↻ Atualizar"}</Button>
@@ -573,9 +573,10 @@ function CarteiraScreen({ isAdmin }) {
   const fechadas = posicoes.filter(p => p.resultado != null);
   const resultadoTotal = fechadas.length ? (fechadas.reduce((s, p) => s + p.resultado, 0) / fechadas.length) : 0;
 
+  const tabLabel = (icon, text) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name={icon} size={15} /> {text}</span>;
   const tabs = isAdmin
-    ? [{ key: "carteira", label: "📋 Recomendações" }, { key: "posicoes", label: "📊 Posições (" + abertas + ")" }]
-    : [{ key: "posicoes", label: "📊 Posições (" + abertas + ")" }];
+    ? [{ key: "carteira", label: tabLabel("list", "Recomendações") }, { key: "posicoes", label: tabLabel("positions", "Posições (" + abertas + ")") }]
+    : [{ key: "posicoes", label: tabLabel("positions", "Posições (" + abertas + ")") }];
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -583,7 +584,7 @@ function CarteiraScreen({ isAdmin }) {
         <Tabs items={tabs} value={aba} onChange={setAba} />
         {isAdmin && (
           <div style={{ display: "flex", gap: 10 }}>
-            <Button variant="success" size="sm" onClick={scan} disabled={scanning}>{scanning ? "⟳ Buscando..." : "🔍 Buscar com IA"}</Button>
+            <Button variant="success" size="sm" onClick={scan} disabled={scanning}>{scanning ? "⟳ Buscando..." : <><Icon name="search" size={14} /> Buscar com IA</>}</Button>
             <Button size="sm" onClick={() => setShowForm(true)}>+ Nova recomendação</Button>
           </div>
         )}
@@ -600,7 +601,7 @@ function CarteiraScreen({ isAdmin }) {
             <Card style={{ overflow: "hidden", borderColor: T.green + "55" }}>
               <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid " + T.line, background: "#0c1f0c" }}>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: T.green }}>🔍 Oportunidades — {scanResult.data}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: T.green, display: "flex", alignItems: "center", gap: 7 }}><Icon name="search" size={15} /> Oportunidades — {scanResult.data}</div>
                   {scanResult.contexto && <div style={{ fontSize: 13, color: T.mut, marginTop: 4 }}>{scanResult.contexto}</div>}
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => setScanResult(null)}>×</Button>
@@ -642,9 +643,9 @@ function CarteiraScreen({ isAdmin }) {
             </Card>
           )}
           {acoes.length === 0 && !scanResult && (
-            <EmptyState icon="📈" title="Nenhuma recomendação ainda" desc={isAdmin ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
+            <EmptyState icon={<Icon name="carteira" size={40} color={T.dim} />} title="Nenhuma recomendação ainda" desc={isAdmin ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
               {isAdmin && <>
-                <Button variant="success" onClick={scan}>🔍 Buscar com IA</Button>
+                <Button variant="success" onClick={scan}><Icon name="search" size={14} /> Buscar com IA</Button>
                 <Button onClick={() => setShowForm(true)}>+ Adicionar manualmente</Button>
               </>}
             </EmptyState>
@@ -701,7 +702,7 @@ function CarteiraScreen({ isAdmin }) {
             <Stat label="Total ops" value={posicoes.length} tone="blue" />
           </div>
           {posicoes.length === 0 ? (
-            <EmptyState icon="📊" title="Nenhuma posição registrada" desc="Valide uma recomendação na aba Recomendações para abrir uma posição." />
+            <EmptyState icon={<Icon name="positions" size={40} color={T.dim} />} title="Nenhuma posição registrada" desc="Valide uma recomendação na aba Recomendações para abrir uma posição." />
           ) : (
             <Card style={{ overflow: "hidden" }}>
               <div className="fh-scroll-x">
@@ -873,7 +874,7 @@ function ConselheiroScreen({ userId }) {
               </div>
             ))}
           </div>
-          <Button variant={showDiario ? "gold" : "ghost"} size="sm" onClick={() => setShowDiario(v => !v)}>📓 Diário</Button>
+          <Button variant={showDiario ? "gold" : "ghost"} size="sm" onClick={() => setShowDiario(v => !v)}><Icon name="journal" size={15} /> Diário</Button>
         </div>
 
         {perfil && perfil.preferencia !== "a definir" && (
@@ -931,9 +932,9 @@ function ConselheiroScreen({ userId }) {
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <input ref={fileRef} type="file" accept={ACCEPT} multiple style={{ display: "none" }} onChange={e => pickFiles(e.target.files)} />
-            <Button variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={loading} title="Anexar imagem ou PDF" style={{ fontSize: 18, padding: "0 14px" }}>📎</Button>
+            <Button variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={loading} title="Anexar imagem ou PDF" style={{ padding: "0 14px" }}><Icon name="attach" size={18} /></Button>
             <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="Fale com O Conselheiro..." style={{ flex: 1 }} />
-            <Button onClick={() => send()} disabled={loading} style={{ fontSize: 18, padding: "0 18px" }}>↑</Button>
+            <Button onClick={() => send()} disabled={loading} title="Enviar" style={{ padding: "0 18px" }}><Icon name="send" size={18} /></Button>
           </div>
           </div>
         </div>
@@ -943,7 +944,7 @@ function ConselheiroScreen({ userId }) {
         <aside className="fh-diary" style={{ width: 320, flexShrink: 0, borderLeft: "1px solid " + T.line, background: T.bg, display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "16px 18px", borderBottom: "1px solid " + T.line }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ fontSize: 14, color: T.gold, fontWeight: 700 }}>📓 Diário do trader</div>
+              <div style={{ fontSize: 14, color: T.gold, fontWeight: 700, display: "flex", alignItems: "center", gap: 7 }}><Icon name="journal" size={15} /> Diário do trader</div>
               <Button variant="ghost" size="sm" onClick={() => setShowDiario(false)} style={{ padding: "4px 10px" }}>×</Button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
