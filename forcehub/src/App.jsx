@@ -587,6 +587,7 @@ function EquityCurve({ positions, title = "Curva de capital", noun = "trade", em
   const area = "M" + x(0).toFixed(1) + " " + y(0).toFixed(1) + " " + pts.map((p, i) => "L" + x(i).toFixed(1) + " " + y(p.cum).toFixed(1)).join(" ") + " L" + x(n - 1).toFixed(1) + " " + y(0).toFixed(1) + " Z";
   const color = total >= 0 ? T.green : T.red;
   const y0 = y(0);
+  const gid = "fh-eq-" + String(title).replace(/\W+/g, "");
 
   return (
     <Card style={{ overflow: "hidden" }}>
@@ -597,13 +598,13 @@ function EquityCurve({ positions, title = "Curva de capital", noun = "trade", em
       <div style={{ padding: 12 }}>
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
           <defs>
-            <linearGradient id="fh-eq" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={color} stopOpacity="0.22" />
               <stop offset="100%" stopColor={color} stopOpacity="0" />
             </linearGradient>
           </defs>
           <line x1={padL} y1={y0} x2={W - padR} y2={y0} stroke={T.line} strokeWidth="1" strokeDasharray="4 4" />
-          <path d={area} fill="url(#fh-eq)" />
+          <path d={area} fill={`url(#${gid})`} />
           <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
           <circle cx={x(n - 1)} cy={y(pts[n - 1].cum)} r="4" fill={color} />
         </svg>

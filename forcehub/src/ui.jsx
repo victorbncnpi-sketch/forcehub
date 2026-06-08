@@ -46,6 +46,10 @@ input, textarea { font-family: inherit; }
 .fh-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .fh-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .fh-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; animation: fh-fade .22s ease; }
+/* Quando a página é um flex column, os filhos não devem encolher para caber:
+   precisam manter a altura natural para a página ROLAR (senão SVGs colapsam e
+   Cards com overflow:hidden cortam o conteúdo em vez de rolar). */
+.fh-page > * { flex-shrink: 0; }
 .fh-scroll-x { overflow-x: auto; }
 .fh-card-hover { transition: border-color .15s, transform .15s; }
 .fh-card-hover:hover { border-color: ${T.lineGold}; transform: translateY(-2px); }
