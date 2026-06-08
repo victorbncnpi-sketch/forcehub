@@ -1616,7 +1616,7 @@ function TradesScreen({ session }) {
   if (loading) return <div style={{ padding: 40 }}><Loading label="Carregando seu diário..." /></div>;
 
   return (
-    <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+    <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {err && <Banner tone="red">{err}</Banner>}
 
       {/* Configuração: valor de 1R + novo trade */}
@@ -1769,7 +1769,7 @@ function DashboardScreen({ session }) {
 
   if (!s.n) {
     return (
-      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px" }}>
+      <div className="fh-page">
         <EmptyState icon="📊" title="Sem dados ainda"
           desc="Registre operações em Meus Trades (ou deixe O Conselheiro registrar) para ver seu dashboard de performance." />
       </div>
@@ -1801,7 +1801,7 @@ function DashboardScreen({ session }) {
   };
 
   return (
-    <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+    <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {/* Toggle de fontes */}
       <Card style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{includeCarteira ? " + carteira" : ""}</div>
