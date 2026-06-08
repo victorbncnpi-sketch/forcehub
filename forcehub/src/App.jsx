@@ -513,6 +513,89 @@ function PosicaoRow({ p, onFechar }) {
   );
 }
 
+// Redimensiona uma imagem no navegador (mantém proporção) e retorna um data URL
+// JPEG comprimido — evita estourar o limite de payload do banco.
+async function resizeImage(file, maxDim = 1280, quality = 0.78) {
+  const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+  const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = dataUrl; });
+  let { width, height } = img;
+  if (Math.max(width, height) > maxDim) { const s = maxDim / Math.max(width, height); width = Math.round(width * s); height = Math.round(height * s); }
+  const c = document.createElement("canvas"); c.width = width; c.height = height;
+  c.getContext("2d").drawImage(img, 0, 0, width, height);
+  return c.toDataURL("image/jpeg", quality);
+}
+
+// Imagem (print do gráfico) de uma recomendação — carregada sob demanda.
+function RecImage({ id, onOpen }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let on = true;
+    (async () => { try { const j = await api.get("/api/carteira?img=" + encodeURIComponent(id)); if (on && j.image) setSrc(j.image); } catch (e) {} })();
+    return () => { on = false; };
+  }, [id]);
+  if (!src) return null;
+  return (
+    <div style={{ padding: "0 16px 14px" }}>
+      <img src={src} alt="Gráfico" onClick={() => onOpen && onOpen(src)} style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 8, border: "1px solid " + T.line, cursor: "zoom-in", display: "block" }} />
+    </div>
+  );
+}
+
+// Curva de capital: % acumulado dos trades fechados (verde no ganho, vermelho na perda).
+function EquityCurve({ positions }) {
+  const parse = (d) => { if (!d) return 0; const [dd, mm, yy] = String(d).split("/"); const t = new Date(`${yy}-${mm}-${dd}`).getTime(); return isNaN(t) ? 0 : t; };
+  const closed = positions.filter(p => p.resultado != null).sort((a, b) => parse(a.dataSaida) - parse(b.dataSaida));
+  let cum = 0;
+  const pts = [{ cum: 0 }];
+  closed.forEach(p => { cum += p.resultado; pts.push({ cum: +cum.toFixed(2) }); });
+  const total = cum;
+
+  if (!closed.length) {
+    return (
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>Curva de capital</div>
+        <div style={{ padding: 28, textAlign: "center", fontSize: 14, color: T.dim }}>A curva aparece quando você fechar a primeira posição.</div>
+      </Card>
+    );
+  }
+
+  const W = 1000, H = 230, padL = 14, padR = 14, padT = 16, padB = 18;
+  const vals = pts.map(p => p.cum);
+  let minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
+  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const m = (maxV - minV) * 0.08; minV -= m; maxV += m;
+  const n = pts.length;
+  const x = (i) => padL + (n === 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
+  const y = (v) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p.cum).toFixed(1)).join(" ");
+  const area = "M" + x(0).toFixed(1) + " " + y(0).toFixed(1) + " " + pts.map((p, i) => "L" + x(i).toFixed(1) + " " + y(p.cum).toFixed(1)).join(" ") + " L" + x(n - 1).toFixed(1) + " " + y(0).toFixed(1) + " Z";
+  const color = total >= 0 ? T.green : T.red;
+  const y0 = y(0);
+
+  return (
+    <Card style={{ overflow: "hidden" }}>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Curva de capital</div>
+        <div style={{ fontSize: 13, color: T.dim }}>{closed.length} trade{closed.length > 1 ? "s" : ""} · acumulado <span style={{ color, fontWeight: 700, fontFamily: T.mono }}>{(total >= 0 ? "+" : "") + total.toFixed(2)}%</span></div>
+      </div>
+      <div style={{ padding: 12 }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+          <defs>
+            <linearGradient id="fh-eq" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+              <stop offset="100%" stopColor={color} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <line x1={padL} y1={y0} x2={W - padR} y2={y0} stroke={T.line} strokeWidth="1" strokeDasharray="4 4" />
+          <path d={area} fill="url(#fh-eq)" />
+          <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+          <circle cx={x(n - 1)} cy={y(pts[n - 1].cum)} r="4" fill={color} />
+        </svg>
+      </div>
+    </Card>
+  );
+}
+
 // ─── Carteira Recomendada ─────────────────────────────────────────────────────
 function CarteiraScreen({ canWrite }) {
   const [acoes, setAcoes] = useState([]);
@@ -522,10 +605,21 @@ function CarteiraScreen({ canWrite }) {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState(null);
-  const [form, setForm] = useState({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
+  const [form, setForm] = useState({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
   const [loadError, setLoadError] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [lightbox, setLightbox] = useState(null);
+  const [imgBusy, setImgBusy] = useState(false);
+  const recFileRef = useRef(null);
   const idRef = useRef(1);
+
+  const pickRecImage = async (file) => {
+    if (!file) return;
+    setImgBusy(true);
+    try { const d = await resizeImage(file); setForm(p => ({ ...p, imagem: d })); }
+    catch (e) { /* ignora arquivo inválido */ }
+    finally { setImgBusy(false); if (recFileRef.current) recFileRef.current.value = ""; }
+  };
 
   useEffect(() => {
     let active = true;
@@ -554,18 +648,22 @@ function CarteiraScreen({ canWrite }) {
     if (!ev || !av || !sv || isNaN(ev) || isNaN(av) || isNaN(sv)) return null;
     return Math.abs((av - ev) / (ev - sv));
   };
-  const addAcao = () => {
+  const addAcao = async () => {
     const e = parseFloat(form.entrada), a = parseFloat(form.alvo), s = parseFloat(form.stop);
     if (!form.ticker || !e || !a || !s) return;
-    const nova = { id: idRef.current++, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false };
+    const id = idRef.current++;
+    const nova = { id, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false, hasImage: !!form.imagem };
+    if (form.imagem) { try { await api.post("/api/carteira?img=" + id, { data: form.imagem }); } catch (err) { nova.hasImage = false; setLoadError("Falha ao salvar a imagem: " + err.message); } }
     const next = [...acoes, nova];
     setAcoes(next); saveCarteira(next, posicoes);
-    setForm({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
+    setForm({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
     setShowForm(false);
   };
   const removeAcao = (id) => {
+    const alvo = acoes.find(x => x.id === id);
     const next = acoes.filter(x => x.id !== id);
     setAcoes(next); saveCarteira(next, posicoes);
+    if (alvo && alvo.hasImage) { api.post("/api/carteira?img=" + id, { data: null }).catch(() => {}); }
   };
   const addFromScan = (op) => {
     const nova = { id: idRef.current++, ticker: op.ticker, nome: op.nome, direcao: tradeDir(op), entrada: op.entrada, alvo: op.alvo, stop: op.stop, qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true };
@@ -597,7 +695,8 @@ function CarteiraScreen({ canWrite }) {
   const rrColor = (r) => r >= 3 ? T.green : r >= 2 ? "#86efac" : r >= 1 ? T.gold : T.red;
   const abertas = posicoes.filter(p => p.status === "ABERTA").length;
   const fechadas = posicoes.filter(p => p.resultado != null);
-  const resultadoTotal = fechadas.length ? (fechadas.reduce((s, p) => s + p.resultado, 0) / fechadas.length) : 0;
+  const acumulado = fechadas.reduce((s, p) => s + p.resultado, 0);
+  const resultadoTotal = fechadas.length ? (acumulado / fechadas.length) : 0;
 
   const tabLabel = (icon, text) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name={icon} size={15} /> {text}</span>;
   // Recomendações são visíveis a quem tem leitura (cap "carteira"); os controles
@@ -716,6 +815,7 @@ function CarteiraScreen({ canWrite }) {
                       </div>
                       <div style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>{a.addedAt}</div>
                     </div>
+                    {a.hasImage && <RecImage id={a.id} onOpen={setLightbox} />}
                     {a.obs && <div style={{ padding: "11px 16px", borderTop: "1px solid " + T.line, fontSize: 13, color: T.mut, lineHeight: 1.6 }}>💬 {a.obs}</div>}
                   </Card>
                 );
@@ -727,12 +827,15 @@ function CarteiraScreen({ canWrite }) {
 
       {loaded && aba === "posicoes" && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
             <Stat label="Abertas" value={abertas} tone="gold" />
             <Stat label="Fechadas" value={posicoes.filter(p => p.status === "FECHADA").length} tone="mut" />
             <Stat label="Rent. média" value={(resultadoTotal >= 0 ? "+" : "") + resultadoTotal.toFixed(2) + "%"} tone={resultadoTotal >= 0 ? "green" : "red"} />
+            <Stat label="Acumulado" value={(acumulado >= 0 ? "+" : "") + acumulado.toFixed(2) + "%"} tone={acumulado >= 0 ? "green" : "red"} />
             <Stat label="Total ops" value={posicoes.length} tone="blue" />
           </div>
+
+          <EquityCurve positions={posicoes} />
           {posicoes.length === 0 ? (
             <EmptyState icon={<Icon name="positions" size={40} color={T.dim} />} title="Nenhuma posição registrada" desc="Valide uma recomendação na aba Recomendações para abrir uma posição." />
           ) : (
@@ -774,6 +877,19 @@ function CarteiraScreen({ canWrite }) {
               <Field label="Qtde"><Input mono type="number" min="1" value={form.qty} onChange={e => setF("qty", e.target.value)} placeholder="100" /></Field>
               <Field label="Tese / Obs"><Input value={form.obs} onChange={e => setF("obs", e.target.value)} placeholder="Rompimento de resistência..." /></Field>
             </div>
+            <Field label="Print do gráfico (opcional)" hint="Anexe a screenshot do setup; ela aparece na recomendação para os clientes.">
+              <input ref={recFileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: "none" }} onChange={e => pickRecImage(e.target.files && e.target.files[0])} />
+              {form.imagem ? (
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                  <img src={form.imagem} alt="Prévia" style={{ maxWidth: 220, maxHeight: 140, borderRadius: 8, border: "1px solid " + T.line }} />
+                  <Button variant="ghost" size="sm" onClick={() => setF("imagem", "")}>Remover imagem</Button>
+                </div>
+              ) : (
+                <Button variant="ghost" onClick={() => recFileRef.current && recFileRef.current.click()} disabled={imgBusy}>
+                  <Icon name="attach" size={16} /> {imgBusy ? "Processando..." : "Anexar print"}
+                </Button>
+              )}
+            </Field>
             {calcRR(form.entrada, form.alvo, form.stop) !== null && (
               <div style={{ background: T.inset, border: "1px solid " + T.line, borderRadius: 10, padding: "14px 18px", display: "flex", gap: 28 }}>
                 <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>R:R</div><div style={{ fontSize: 24, fontWeight: 800, color: rrColor(calcRR(form.entrada, form.alvo, form.stop)), fontFamily: T.mono }}>1:{calcRR(form.entrada, form.alvo, form.stop).toFixed(2)}</div></div>
@@ -786,6 +902,12 @@ function CarteiraScreen({ canWrite }) {
               <Button onClick={addAcao}>Adicionar →</Button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {lightbox && (
+        <Modal title="Gráfico do ativo" onClose={() => setLightbox(null)} width={900}>
+          <img src={lightbox} alt="Gráfico" style={{ width: "100%", borderRadius: 8, display: "block" }} />
         </Modal>
       )}
     </div>
