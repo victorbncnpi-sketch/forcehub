@@ -830,7 +830,9 @@ function CarteiraScreen({ canWrite }) {
                 const rr = Math.abs((a.alvo - a.entrada) / (a.entrada - a.stop));
                 const pot = tradePot(a).toFixed(1);
                 const sp = tradeRisco(a).toFixed(1);
-                const participando = posicoes.some(p => p.recId === a.id && p.status === "ABERTA");
+                // Qualquer posição (aberta OU encerrada) dessa recomendação conta:
+                // evita reaceitar e duplicar a operação no histórico depois de fechar.
+                const minhaPos = posicoes.find(p => p.recId === a.id);
                 return (
                   <Card key={a.id} className="fh-card-hover" style={{ overflow: "hidden" }}>
                     <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: T.panel2, borderBottom: "1px solid " + T.line }}>
@@ -860,8 +862,8 @@ function CarteiraScreen({ canWrite }) {
                       <div style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>{a.addedAt}</div>
                     </div>
                     <div style={{ padding: "0 16px 14px" }}>
-                      {participando
-                        ? <Button variant="ghost" size="sm" disabled style={{ width: "100%" }}>✓ Você está acompanhando</Button>
+                      {minhaPos
+                        ? <Button variant="ghost" size="sm" disabled style={{ width: "100%" }}>{minhaPos.status === "ABERTA" ? "✓ Você está acompanhando" : "✓ Você acompanhou (encerrada)"}</Button>
                         : <Button variant="success" size="sm" onClick={() => aceitar(a)} style={{ width: "100%" }}>+ Aceitar e acompanhar</Button>}
                     </div>
                     {canWrite && <EncerrarRec onConfirm={(price) => encerrarRec(a.id, price)} />}
@@ -1741,6 +1743,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
   const [includeCarteira, setIncludeCarteira] = useState(false);
   const [periodo, setPeriodo] = useState("tudo");
   const [ativoF, setAtivoF] = useState("todos");
+  const [curveUnit, setCurveUnit] = useState("R");
   const [loading, setLoading] = useState(true);
   const [ai, setAi] = useState(""); const [aiLoading, setAiLoading] = useState(false); const [aiErr, setAiErr] = useState("");
 
@@ -1893,13 +1896,18 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
         <Stat label="Sequências (G/L)" value={s.maxW + " / " + s.maxL} tone="mut" />
       </div>
 
-      {/* Curvas */}
-      <Curve points={s.curveR} title="Curva de capital (R)" total={s.somaR}
-        sub={<span>acumulado <b style={{ color: signTone(s.somaR), fontFamily: T.mono }}>{fmtR(s.somaR)}</b></span>} unit="R" />
-      {s.hasFin && (
-        <Curve points={s.curveFin} title="Curva de capital (R$)" total={s.somaFin}
-          sub={<span>acumulado <b style={{ color: signTone(s.somaFin), fontFamily: T.mono }}>{fmtBRL(s.somaFin)}</b></span>} unit="BRL" />
-      )}
+      {/* Curva de capital — única, com seletor R / R$ */}
+      {(() => {
+        const emRS = curveUnit === "R$" && s.hasFin;
+        const total = emRS ? s.somaFin : s.somaR;
+        return (
+          <Curve points={emRS ? s.curveFin : s.curveR} title="Curva de capital" total={total} unit={emRS ? "BRL" : "R"}
+            sub={<span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              {s.hasFin && [["R", "R"], ["R$", "R$"]].map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setCurveUnit(k)} style={chip(curveUnit === k)}>{l}</button>)}
+              <span style={{ marginLeft: 4 }}>acumulado <b style={{ color: signTone(total), fontFamily: T.mono }}>{emRS ? fmtBRL(s.somaFin) : fmtR(s.somaR)}</b></span>
+            </span>} />
+        );
+      })()}
 
       {/* Resultado por mês */}
       {months.length > 0 && (
