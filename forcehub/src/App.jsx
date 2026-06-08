@@ -480,7 +480,7 @@ const tradePot = (x) => { const r = ((x.alvo - x.entrada) / x.entrada) * 100; re
 const tradeRisco = (x) => { const r = ((x.stop - x.entrada) / x.entrada) * 100; return tradeDir(x) === "VENDA" ? -r : r; }; // risco até o stop (%) — negativo
 const closePct = (p, saida) => { const r = ((saida - p.entrada) / p.entrada) * 100; return tradeDir(p) === "VENDA" ? -r : r; };
 
-function PosicaoRow({ p, onFechar }) {
+function PosicaoRow({ p, onFechar, onRemove }) {
   const [saida, setSaida] = useState("");
   const isAberta = p.status === "ABERTA";
   const venda = tradeDir(p) === "VENDA";
@@ -501,9 +501,10 @@ function PosicaoRow({ p, onFechar }) {
       <div style={{ fontSize: 15, fontWeight: 700, color: pctColor }}>{pct == null ? "—" : (parseFloat(pct) >= 0 ? "+" : "") + pct + "%"}</div>
       <div>
         {isAberta ? (
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <Input mono type="number" step="0.01" value={saida} onChange={e => setSaida(e.target.value)} placeholder="Saída R$" style={{ padding: "7px 9px", fontSize: 13 }} />
             <Button variant="danger" size="sm" onClick={() => { const v = parseFloat(saida); if (v) onFechar(p.posId, v); }}>Fechar</Button>
+            {onRemove && <button className="fh-btn" onClick={() => onRemove(p.posId)} title="Descartar (não participei)" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>}
           </div>
         ) : (
           <Badge tone="mut">✓ {p.dataSaida}</Badge>
@@ -625,11 +626,12 @@ function CarteiraScreen({ canWrite }) {
     let active = true;
     (async () => {
       try {
-        const j = await api.get("/api/carteira");
+        // Recomendações são compartilhadas; posições são minhas (por usuário).
+        const [c, p] = await Promise.all([api.get("/api/carteira"), api.get("/api/posicoes")]);
         if (!active) return;
-        setAcoes(j.recomendacoes || []);
-        setPosicoes(j.posicoes || []);
-        const ids = [...(j.recomendacoes || []), ...(j.posicoes || [])].flatMap(x => [x.id || 0, x.posId || 0]);
+        setAcoes(c.recomendacoes || []);
+        setPosicoes(p.posicoes || []);
+        const ids = [...(c.recomendacoes || []), ...(p.posicoes || [])].flatMap(x => [x.id || 0, x.posId || 0, x.recId || 0]);
         idRef.current = Math.max(0, ...ids) + 1;
       } catch (e) { if (active) setLoadError(e.message); }
       finally { if (active) setLoaded(true); }
@@ -637,9 +639,13 @@ function CarteiraScreen({ canWrite }) {
     return () => { active = false; };
   }, []);
 
-  const saveCarteira = async (recs, poss) => {
-    try { await api.post("/api/carteira", { recomendacoes: recs, posicoes: poss }); }
-    catch (e) { setLoadError("Falha ao salvar: " + e.message); }
+  const saveRecs = async (recs) => {
+    try { await api.post("/api/carteira", { recomendacoes: recs, posicoes: [] }); }
+    catch (e) { setLoadError("Falha ao salvar recomendações: " + e.message); }
+  };
+  const savePos = async (poss) => {
+    try { await api.post("/api/posicoes", { posicoes: poss }); }
+    catch (e) { setLoadError("Falha ao salvar posições: " + e.message); }
   };
 
   const setF = (k, v) => setForm(p => ({ ...p, [k]: v }));
@@ -655,22 +661,31 @@ function CarteiraScreen({ canWrite }) {
     const nova = { id, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false, hasImage: !!form.imagem };
     if (form.imagem) { try { await api.post("/api/carteira?img=" + id, { data: form.imagem }); } catch (err) { nova.hasImage = false; setLoadError("Falha ao salvar a imagem: " + err.message); } }
     const next = [...acoes, nova];
-    setAcoes(next); saveCarteira(next, posicoes);
+    setAcoes(next); saveRecs(next);
     setForm({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
     setShowForm(false);
   };
   const removeAcao = (id) => {
     const alvo = acoes.find(x => x.id === id);
     const next = acoes.filter(x => x.id !== id);
-    setAcoes(next); saveCarteira(next, posicoes);
+    setAcoes(next); saveRecs(next);
     if (alvo && alvo.hasImage) { api.post("/api/carteira?img=" + id, { data: null }).catch(() => {}); }
   };
   const addFromScan = (op) => {
     const nova = { id: idRef.current++, ticker: op.ticker, nome: op.nome, direcao: tradeDir(op), entrada: op.entrada, alvo: op.alvo, stop: op.stop, qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true };
     const nextAcoes = [...acoes, nova];
-    const nextPos = [...posicoes, { ...nova, posId: idRef.current++, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null }];
-    setAcoes(nextAcoes); setPosicoes(nextPos); saveCarteira(nextAcoes, nextPos);
+    setAcoes(nextAcoes); saveRecs(nextAcoes);
+  };
+  // Cliente "aceita" uma recomendação -> abre uma posição na carteira dele.
+  const aceitar = (a) => {
+    const nova = { posId: idRef.current++, recId: a.id, ticker: a.ticker, nome: a.nome, direcao: tradeDir(a), entrada: a.entrada, alvo: a.alvo, stop: a.stop, qty: a.qty || 1, ai: !!a.ai, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null };
+    const nextPos = [...posicoes, nova];
+    setPosicoes(nextPos); savePos(nextPos);
     setAba("posicoes");
+  };
+  const removerPosicao = (posId) => {
+    const nextPos = posicoes.filter(p => p.posId !== posId);
+    setPosicoes(nextPos); savePos(nextPos);
   };
   const fecharPosicao = (posId, precoSaida) => {
     const nextPos = posicoes.map(p => {
@@ -678,7 +693,7 @@ function CarteiraScreen({ canWrite }) {
       const pct = closePct(p, precoSaida); // direção-aware (short inverte o sinal)
       return { ...p, status: "FECHADA", precoSaida, dataSaida: new Date().toLocaleDateString("pt-BR"), resultado: parseFloat(pct.toFixed(2)) };
     });
-    setPosicoes(nextPos); saveCarteira(acoes, nextPos);
+    setPosicoes(nextPos); savePos(nextPos);
   };
   const scan = async () => {
     setScanning(true); setScanError(null); setScanResult(null);
@@ -763,7 +778,7 @@ function CarteiraScreen({ canWrite }) {
                       </div>
                       {(op.setup || op.racional) && <div style={{ fontSize: 13, color: T.mut, marginBottom: 12, lineHeight: 1.6 }}><span style={{ color: T.gold }}>📊 {op.setup}</span> — {op.racional}</div>}
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <Button variant="success" size="sm" onClick={() => addFromScan(op)}>✓ Validar e adicionar</Button>
+                        <Button variant="success" size="sm" onClick={() => addFromScan(op)}>✓ Publicar recomendação</Button>
                         <span style={{ fontSize: 12, color: T.dim }}>Analise como CNPI antes de recomendar</span>
                       </div>
                     </div>
@@ -787,6 +802,7 @@ function CarteiraScreen({ canWrite }) {
                 const rr = Math.abs((a.alvo - a.entrada) / (a.entrada - a.stop));
                 const pot = tradePot(a).toFixed(1);
                 const sp = tradeRisco(a).toFixed(1);
+                const participando = posicoes.some(p => p.recId === a.id && p.status === "ABERTA");
                 return (
                   <Card key={a.id} className="fh-card-hover" style={{ overflow: "hidden" }}>
                     <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: T.panel2, borderBottom: "1px solid " + T.line }}>
@@ -815,6 +831,11 @@ function CarteiraScreen({ canWrite }) {
                       </div>
                       <div style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>{a.addedAt}</div>
                     </div>
+                    <div style={{ padding: "0 16px 14px" }}>
+                      {participando
+                        ? <Button variant="ghost" size="sm" disabled style={{ width: "100%" }}>✓ Você está acompanhando</Button>
+                        : <Button variant="success" size="sm" onClick={() => aceitar(a)} style={{ width: "100%" }}>+ Aceitar e acompanhar</Button>}
+                    </div>
                     {a.hasImage && <RecImage id={a.id} onOpen={setLightbox} />}
                     {a.obs && <div style={{ padding: "11px 16px", borderTop: "1px solid " + T.line, fontSize: 13, color: T.mut, lineHeight: 1.6 }}>💬 {a.obs}</div>}
                   </Card>
@@ -837,7 +858,7 @@ function CarteiraScreen({ canWrite }) {
 
           <EquityCurve positions={posicoes} />
           {posicoes.length === 0 ? (
-            <EmptyState icon={<Icon name="positions" size={40} color={T.dim} />} title="Nenhuma posição registrada" desc="Valide uma recomendação na aba Recomendações para abrir uma posição." />
+            <EmptyState icon={<Icon name="positions" size={40} color={T.dim} />} title="Nenhuma posição registrada" desc="Na aba Recomendações, clique em “Aceitar e acompanhar” para começar a registrar suas operações." />
           ) : (
             <Card style={{ overflow: "hidden" }}>
               <div className="fh-scroll-x">
@@ -845,7 +866,7 @@ function CarteiraScreen({ canWrite }) {
                   <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
                     {["TICKER", "EMPRESA", "ENTRADA", "ALVO", "STOP", "SAÍDA", "RENT.%", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
                   </div>
-                  {posicoes.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} />)}
+                  {posicoes.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} onRemove={removerPosicao} />)}
                 </div>
               </div>
             </Card>
