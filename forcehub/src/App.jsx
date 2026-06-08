@@ -542,8 +542,19 @@ function RecImage({ id, onOpen }) {
   );
 }
 
+// Encerrar uma recomendação (resultado oficial da call) — só admin.
+function EncerrarRec({ onConfirm }) {
+  const [v, setV] = useState("");
+  return (
+    <div style={{ display: "flex", gap: 6, padding: "0 16px 14px", alignItems: "center" }}>
+      <Input mono type="number" step="0.01" value={v} onChange={e => setV(e.target.value)} placeholder="Preço de saída (encerrar call)" style={{ flex: 1, padding: "7px 9px", fontSize: 13 }} />
+      <Button variant="ghost" size="sm" onClick={() => { const x = parseFloat(v); if (x) onConfirm(x); }}>Encerrar</Button>
+    </div>
+  );
+}
+
 // Curva de capital: % acumulado dos trades fechados (verde no ganho, vermelho na perda).
-function EquityCurve({ positions }) {
+function EquityCurve({ positions, title = "Curva de capital", noun = "trade", emptyHint = "A curva aparece quando você fechar a primeira posição." }) {
   const parse = (d) => { if (!d) return 0; const [dd, mm, yy] = String(d).split("/"); const t = new Date(`${yy}-${mm}-${dd}`).getTime(); return isNaN(t) ? 0 : t; };
   const closed = positions.filter(p => p.resultado != null).sort((a, b) => parse(a.dataSaida) - parse(b.dataSaida));
   let cum = 0;
@@ -554,8 +565,8 @@ function EquityCurve({ positions }) {
   if (!closed.length) {
     return (
       <Card style={{ overflow: "hidden" }}>
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>Curva de capital</div>
-        <div style={{ padding: 28, textAlign: "center", fontSize: 14, color: T.dim }}>A curva aparece quando você fechar a primeira posição.</div>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>{title}</div>
+        <div style={{ padding: 28, textAlign: "center", fontSize: 14, color: T.dim }}>{emptyHint}</div>
       </Card>
     );
   }
@@ -576,8 +587,8 @@ function EquityCurve({ positions }) {
   return (
     <Card style={{ overflow: "hidden" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Curva de capital</div>
-        <div style={{ fontSize: 13, color: T.dim }}>{closed.length} trade{closed.length > 1 ? "s" : ""} · acumulado <span style={{ color, fontWeight: 700, fontFamily: T.mono }}>{(total >= 0 ? "+" : "") + total.toFixed(2)}%</span></div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{title}</div>
+        <div style={{ fontSize: 13, color: T.dim }}>{closed.length} {noun}{closed.length > 1 ? "s" : ""} · acumulado <span style={{ color, fontWeight: 700, fontFamily: T.mono }}>{(total >= 0 ? "+" : "") + total.toFixed(2)}%</span></div>
       </div>
       <div style={{ padding: 12 }}>
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
@@ -687,6 +698,15 @@ function CarteiraScreen({ canWrite }) {
     const nextPos = posicoes.filter(p => p.posId !== posId);
     setPosicoes(nextPos); savePos(nextPos);
   };
+  // Admin encerra a call -> resultado oficial (entra no track record compartilhado).
+  const encerrarRec = (id, precoSaida) => {
+    const next = acoes.map(a => {
+      if (a.id !== id) return a;
+      const pct = closePct(a, precoSaida);
+      return { ...a, status: "ENCERRADA", precoSaida, dataSaida: new Date().toLocaleDateString("pt-BR"), resultado: parseFloat(pct.toFixed(2)) };
+    });
+    setAcoes(next); saveRecs(next);
+  };
   const fecharPosicao = (posId, precoSaida) => {
     const nextPos = posicoes.map(p => {
       if (p.posId !== posId) return p;
@@ -712,13 +732,16 @@ function CarteiraScreen({ canWrite }) {
   const fechadas = posicoes.filter(p => p.resultado != null);
   const acumulado = fechadas.reduce((s, p) => s + p.resultado, 0);
   const resultadoTotal = fechadas.length ? (acumulado / fechadas.length) : 0;
+  const recsAtivas = acoes.filter(a => a.status !== "ENCERRADA");
+  const recsEncerradas = acoes.filter(a => a.status === "ENCERRADA");
 
   const tabLabel = (icon, text) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name={icon} size={15} /> {text}</span>;
   // Recomendações são visíveis a quem tem leitura (cap "carteira"); os controles
   // de criar/buscar/excluir abaixo é que exigem "carteira_write".
   const tabs = [
     { key: "carteira", label: tabLabel("list", "Recomendações") },
-    { key: "posicoes", label: tabLabel("positions", "Posições (" + abertas + ")") },
+    { key: "posicoes", label: tabLabel("positions", "Minhas posições (" + abertas + ")") },
+    { key: "track", label: tabLabel("carteira", "Desempenho") },
   ];
 
   return (
@@ -787,17 +810,17 @@ function CarteiraScreen({ canWrite }) {
               </div>
             </Card>
           )}
-          {acoes.length === 0 && !scanResult && (
-            <EmptyState icon={<Icon name="carteira" size={40} color={T.dim} />} title="Nenhuma recomendação ainda" desc={canWrite ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
+          {recsAtivas.length === 0 && !scanResult && (
+            <EmptyState icon={<Icon name="carteira" size={40} color={T.dim} />} title="Nenhuma recomendação ativa" desc={canWrite ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
               {canWrite && <>
                 <Button variant="success" onClick={scan}><Icon name="search" size={14} /> Buscar com IA</Button>
                 <Button onClick={() => setShowForm(true)}>+ Adicionar manualmente</Button>
               </>}
             </EmptyState>
           )}
-          {acoes.length > 0 && (
+          {recsAtivas.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
-              {acoes.map(a => {
+              {recsAtivas.map(a => {
                 const venda = tradeDir(a) === "VENDA";
                 const rr = Math.abs((a.alvo - a.entrada) / (a.entrada - a.stop));
                 const pot = tradePot(a).toFixed(1);
@@ -836,6 +859,7 @@ function CarteiraScreen({ canWrite }) {
                         ? <Button variant="ghost" size="sm" disabled style={{ width: "100%" }}>✓ Você está acompanhando</Button>
                         : <Button variant="success" size="sm" onClick={() => aceitar(a)} style={{ width: "100%" }}>+ Aceitar e acompanhar</Button>}
                     </div>
+                    {canWrite && <EncerrarRec onConfirm={(price) => encerrarRec(a.id, price)} />}
                     {a.hasImage && <RecImage id={a.id} onOpen={setLightbox} />}
                     {a.obs && <div style={{ padding: "11px 16px", borderTop: "1px solid " + T.line, fontSize: 13, color: T.mut, lineHeight: 1.6 }}>💬 {a.obs}</div>}
                   </Card>
@@ -873,6 +897,51 @@ function CarteiraScreen({ canWrite }) {
           )}
         </>
       )}
+
+      {loaded && aba === "track" && (() => {
+        const acertos = recsEncerradas.filter(a => a.resultado > 0).length;
+        const acc = recsEncerradas.length ? (acertos / recsEncerradas.length) * 100 : 0;
+        const acum = recsEncerradas.reduce((s, a) => s + (a.resultado || 0), 0);
+        return (
+          <>
+            <div style={{ fontSize: 13, color: T.dim }}>Histórico oficial das recomendações encerradas — desempenho das nossas chamadas.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+              <Stat label="Calls encerradas" value={recsEncerradas.length} tone="blue" />
+              <Stat label="Ativas" value={recsAtivas.length} tone="gold" />
+              <Stat label="Assertividade" value={recsEncerradas.length ? acc.toFixed(0) + "%" : "—"} tone={acc >= 50 ? "green" : "red"} />
+              <Stat label="Acumulado" value={(acum >= 0 ? "+" : "") + acum.toFixed(2) + "%"} tone={acum >= 0 ? "green" : "red"} />
+            </div>
+
+            <EquityCurve positions={recsEncerradas} title="Desempenho das recomendações" noun="call" emptyHint="A curva aparece quando você encerrar a primeira recomendação." />
+
+            {recsEncerradas.length > 0 && (
+              <Card style={{ overflow: "hidden" }}>
+                <div className="fh-scroll-x">
+                  <div style={{ minWidth: 640 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "90px 96px 1fr 100px 90px 110px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
+                      {["TICKER", "DIREÇÃO", "ENTRADA → SAÍDA", "RESULTADO", "R:R", "ENCERRADA"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
+                    </div>
+                    {[...recsEncerradas].reverse().map(a => {
+                      const venda = tradeDir(a) === "VENDA";
+                      const rr = Math.abs((a.alvo - a.entrada) / (a.entrada - a.stop));
+                      return (
+                        <div key={a.id} style={{ display: "grid", gridTemplateColumns: "90px 96px 1fr 100px 90px 110px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: T.gold }}>{a.ticker}</div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: venda ? T.red : T.green }}>{venda ? "▼ VENDA" : "▲ COMPRA"}</div>
+                          <div style={{ fontSize: 13, color: T.mut }}>R$ {a.entrada.toFixed(2)} → R$ {a.precoSaida != null ? a.precoSaida.toFixed(2) : "—"}</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: a.resultado >= 0 ? T.green : T.red }}>{(a.resultado >= 0 ? "+" : "") + a.resultado.toFixed(2)}%</div>
+                          <div style={{ fontSize: 13, color: rrColor(rr) }}>1:{rr.toFixed(1)}</div>
+                          <div style={{ fontSize: 12, color: T.dim }}>{a.dataSaida || "—"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Card>
+            )}
+          </>
+        );
+      })()}
 
       {showForm && (
         <Modal title="Nova ação recomendada" onClose={() => setShowForm(false)}>

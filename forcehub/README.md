@@ -24,8 +24,8 @@ Brapi e persistência/autenticação via Upstash Redis, todos no plano grátis).
 | Autenticação | `api/auth.js` · `api/users.js` · `api/_auth.js` | Login por sessão (cookie httpOnly), senhas com hash scrypt no Redis, gestão de clientes (admin) |
 | Proxy de IA | `api/ai.js` | Encaminha à IA usando a chave do backend (Gemini ou Anthropic). A chave nunca vai ao navegador |
 | Cotações | `api/market-data.js` | Busca OHLC de WIN/WDO/IBOV ao vivo na Brapi |
-| Carteira | `api/carteira.js` | Recomendações compartilhadas (admin publica, clientes leem) + prints de gráfico em chaves próprias |
-| Posições | `api/posicoes.js` | Posições **por usuário**: cada cliente aceita uma recomendação e acompanha o próprio resultado (curva de capital) |
+| Carteira | `api/carteira.js` | Recomendações compartilhadas (admin publica, clientes leem) + prints de gráfico em chaves próprias. Admin encerra a call → **track record oficial** (curva de capital compartilhada) |
+| Posições | `api/posicoes.js` | Posições **por usuário**: cada cliente aceita uma recomendação e acompanha o próprio resultado/curva de capital |
 | Conselheiro | `api/conselheiro.js` | Persiste perfil + diário por usuário (cross-device) |
 | Banco | `api/_redis.js` | Cliente Upstash Redis compartilhado |
 
