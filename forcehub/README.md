@@ -21,7 +21,11 @@ Brapi e persistência/autenticação via Upstash Redis, todos no plano grátis).
   de mentoria: acerto, payoff, expectativa, **SQN** (System Quality Number),
   drawdown, run-up, sequências, curva de capital (R e R$), resultado por mês e
   quebras por ativo/direção/dia da semana — com análise gerada por IA. Permite
-  incluir ou não as posições da Carteira no cálculo.
+  incluir ou não as posições da Carteira no cálculo. Filtros por período/ativo.
+- **Painel da Turma** (só super admin) — visão consolidada do mentor: médias da
+  turma (acerto, payoff, SQN, expectativa), curva de capital média, **ranking**
+  dos alunos e um **Painel de Atenção** (drawdown forte, sequência de loss,
+  inatividade, indisciplina/revenge) com drill-down no dashboard de cada aluno.
 
 ## Arquitetura
 
@@ -35,6 +39,7 @@ Brapi e persistência/autenticação via Upstash Redis, todos no plano grátis).
 | Posições | `api/posicoes.js` | Posições **por usuário**: cada cliente aceita uma recomendação e acompanha o próprio resultado/curva de capital |
 | Conselheiro | `api/conselheiro.js` | Persiste perfil + diário por usuário (cross-device) |
 | Diário de Trades | `api/trades.js` | Operações **por usuário** (R-múltiplo + R$, com `valorR`). O Dashboard agrega isto com o diário do Conselheiro e, opcionalmente, as posições da Carteira |
+| Painel da Turma | `api/cohort.js` | **Só super admin**: lê os dados de todos os clientes e devolve ao front, que agrega a turma (médias, ranking, alertas) e abre o dashboard de cada aluno |
 | Banco | `api/_redis.js` | Cliente Upstash Redis compartilhado |
 
 > As cotações são buscadas sob demanda (sem persistência). Login, carteira e

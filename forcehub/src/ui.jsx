@@ -218,6 +218,7 @@ const ICON_PATHS = {
   positions: <><line x1="4" y1="20" x2="4" y2="4" /><line x1="4" y1="20" x2="20" y2="20" /><polyline points="7 15 11 11 14 13 19 7" /></>,
   users: <><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0" /><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" /><path d="M17.5 13.5a5.5 5.5 0 0 1 3 5" /></>,
   dashboard: <><path d="M3.5 14.5a8.5 8.5 0 0 1 17 0" /><line x1="12" y1="14.5" x2="16.2" y2="9.8" /><circle cx="12" cy="14.5" r="1.3" /></>,
+  cohort: <><circle cx="7" cy="8" r="2.3" /><circle cx="16" cy="7" r="2.1" /><path d="M2.5 19a4.5 4.5 0 0 1 9 0" /><path d="M12.6 19a4.6 4.6 0 0 1 8.9-1.6" /></>,
 };
 
 export function Icon({ name, size = 18, color, style }) {

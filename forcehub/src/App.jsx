@@ -159,6 +159,7 @@ const NAV = [
   { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro",         cap: "conselheiro" },
   { key: "trades",      icon: "journal",     label: "Meus Trades", title: "Diário de Trades",      cap: "trades" },
   { key: "dashboard",   icon: "dashboard",   label: "Dashboard",   title: "Dashboard de Performance", cap: "trades" },
+  { key: "turma",       icon: "cohort",      label: "Turma",       title: "Painel da Turma",       cap: "cohort" },
   { key: "clientes",    icon: "users",       label: "Clientes",    title: "Gestão de Clientes",    cap: "manage_clients" },
 ];
 
@@ -1715,26 +1716,35 @@ function TradesScreen({ session }) {
 }
 
 // ─── Dashboard de Performance ─────────────────────────────────────────────────
-function DashboardScreen({ session }) {
-  const userId = session?.user;
+// targetUser/onBack: quando vem do painel da Turma, mostra o dashboard de um
+// aluno (staff pode ler qualquer usuário no backend) com botão de voltar.
+const PERIODOS = [["tudo", "Tudo"], ["30d", "30 dias"], ["90d", "90 dias"], ["ano", "Este ano"]];
+function DashboardScreen({ session, targetUser, targetName, onBack }) {
+  const uid = targetUser || session?.user;
   const [trades, setTrades] = useState([]);
   const [valorR, setValorR] = useState(null);
   const [diario, setDiario] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
   const [includeCarteira, setIncludeCarteira] = useState(false);
+  const [periodo, setPeriodo] = useState("tudo");
+  const [ativoF, setAtivoF] = useState("todos");
   const [loading, setLoading] = useState(true);
   const [ai, setAi] = useState(""); const [aiLoading, setAiLoading] = useState(false); const [aiErr, setAiErr] = useState("");
 
   useEffect(() => {
     (async () => {
-      try { const j = await api.get("/api/trades"); setTrades(j.trades || []); setValorR(j.valorR || null); } catch (e) {}
-      try { const c = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon")); if (Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
-      try { const p = await api.get("/api/posicoes"); if (Array.isArray(p.posicoes)) setPosicoes(p.posicoes); } catch (e) {}
+      const q = "?user=" + encodeURIComponent(uid || "anon");
+      try { const j = await api.get("/api/trades" + q); setTrades(j.trades || []); setValorR(j.valorR || null); } catch (e) {}
+      try { const c = await api.get("/api/conselheiro" + q); if (Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
+      try { const p = await api.get("/api/posicoes" + q); if (Array.isArray(p.posicoes)) setPosicoes(p.posicoes); } catch (e) {}
       setLoading(false);
     })();
-  }, []);
+  }, [uid]);
 
-  const events = buildEvents({ manual: trades, valorR, diario, posicoes, includeCarteira });
+  const allEvents = buildEvents({ manual: trades, valorR, diario, posicoes, includeCarteira });
+  const ativosDisp = Array.from(new Set(allEvents.map(e => e.ativo).filter(Boolean))).sort();
+  const cutoff = periodo === "30d" ? Date.now() - 30 * 864e5 : periodo === "90d" ? Date.now() - 90 * 864e5 : periodo === "ano" ? new Date(new Date().getFullYear(), 0, 1).getTime() : 0;
+  const events = allEvents.filter(e => (!cutoff || e.t >= cutoff) && (ativoF === "todos" || e.ativo === ativoF));
   const s = computeStats(events);
 
   const analisar = async () => {
@@ -1756,7 +1766,7 @@ function DashboardScreen({ session }) {
       ].join("\n");
       const data = await callAI({
         system: "Você é O Conselheiro, coach de trading na B3, direto, técnico e empático — de trader para trader. Analise as estatísticas de performance e responda em português com: (1) um diagnóstico curto, (2) pontos fortes, (3) pontos de atenção e (4) 2 a 3 recomendações práticas. Use os conceitos de R-múltiplo, payoff, expectativa matemática e SQN. Não use tabelas; use parágrafos curtos e bullets com '-'.",
-        messages: [{ role: "user", content: "Minhas estatísticas de trading:\n" + resumo }],
+        messages: [{ role: "user", content: (targetName ? "Estatísticas do aluno " + targetName + " (analise para o mentor):\n" : "Minhas estatísticas de trading:\n") + resumo }],
         max_tokens: 1100,
       });
       const txt = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
@@ -1765,13 +1775,14 @@ function DashboardScreen({ session }) {
     setAiLoading(false);
   };
 
-  if (loading) return <div style={{ padding: 40 }}><Loading label="Calculando suas estatísticas..." /></div>;
+  if (loading) return <div style={{ padding: 40 }}><Loading label="Calculando as estatísticas..." /></div>;
 
-  if (!s.n) {
+  if (!allEvents.length) {
     return (
       <div className="fh-page">
-        <EmptyState icon="📊" title="Sem dados ainda"
-          desc="Registre operações em Meus Trades (ou deixe O Conselheiro registrar) para ver seu dashboard de performance." />
+        {onBack && <Button variant="ghost" size="sm" onClick={onBack} style={{ marginBottom: 14 }}>← Voltar à turma</Button>}
+        <EmptyState icon="📊" title={targetName ? targetName + " ainda não tem operações" : "Sem dados ainda"}
+          desc={targetName ? "Este aluno ainda não registrou trades (nem o Conselheiro registrou para ele)." : "Registre operações em Meus Trades (ou deixe O Conselheiro registrar) para ver seu dashboard de performance."} />
       </div>
     );
   }
@@ -1800,19 +1811,41 @@ function DashboardScreen({ session }) {
     );
   };
 
+  const chip = (active) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid " + (active ? T.lineGold : T.line), background: active ? T.goldSoft : "transparent", color: active ? T.gold : T.mut });
+
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {/* Toggle de fontes */}
-      <Card style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{includeCarteira ? " + carteira" : ""}</div>
-        <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
-          style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
-          <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
-            <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
-          </span>
-          Incluir operações da Carteira
-        </button>
+      {targetName && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <Button variant="ghost" size="sm" onClick={onBack}>← Voltar à turma</Button>
+          <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{targetName} <span style={{ fontSize: 13, color: T.dim, fontFamily: T.mono }}>· {uid}</span></div>
+        </div>
+      )}
+
+      {/* Fontes + filtros */}
+      <Card style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{includeCarteira ? " + carteira" : ""}</div>
+          <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
+            <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
+              <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
+            </span>
+            Incluir operações da Carteira
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid " + T.line, paddingTop: 12 }}>
+          <span style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4 }}>PERÍODO</span>
+          {PERIODOS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setPeriodo(k)} style={chip(periodo === k)}>{l}</button>)}
+          {ativosDisp.length > 0 && <>
+            <span style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, marginLeft: 8 }}>ATIVO</span>
+            <button className="fh-btn" onClick={() => setAtivoF("todos")} style={chip(ativoF === "todos")}>Todos</button>
+            {ativosDisp.map(a => <button key={a} className="fh-btn" onClick={() => setAtivoF(a)} style={chip(ativoF === a)}>{a}</button>)}
+          </>}
+        </div>
       </Card>
+
+      {s.n === 0 && <Banner tone="gold">Nenhuma operação no filtro selecionado.</Banner>}
 
       {/* KPIs principais */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
@@ -1900,6 +1933,152 @@ function DashboardScreen({ session }) {
   );
 }
 
+// ─── Painel da Turma (consolidado do mentor — só super admin) ─────────────────
+const RANK_KEYS = [["somaR", "R acumulado"], ["winRate", "Acerto"], ["sqn", "SQN"], ["payoff", "Payoff"]];
+function TurmaScreen({ session }) {
+  const [students, setStudents] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [includeCarteira, setIncludeCarteira] = useState(false);
+  const [sortKey, setSortKey] = useState("somaR");
+  const [aluno, setAluno] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try { const j = await api.get("/api/cohort"); setStudents(j.students || []); }
+      catch (e) { setErr(e.message); }
+      setLoading(false);
+    })();
+  }, []);
+
+  if (aluno) return <DashboardScreen key={aluno.user} session={session} targetUser={aluno.user} targetName={aluno.name} onBack={() => setAluno(null)} />;
+  if (loading) return <div style={{ padding: 40 }}><Loading label="Carregando a turma..." /></div>;
+  if (err) return <div className="fh-page"><Banner tone="red">{err}</Banner></div>;
+
+  const all = students || [];
+  const rows = all.map(st => {
+    const ev = buildEvents({ manual: st.trades, valorR: st.valorR, diario: st.diario, positions: st.positions, includeCarteira });
+    const stat = computeStats(ev);
+    const lastT = ev.length ? ev[ev.length - 1].t : 0;
+    const peak = Math.max(0, ...stat.curveR);
+    const curDD = +(peak - stat.curveR[stat.curveR.length - 1]).toFixed(2);
+    const daysIdle = lastT ? Math.floor((Date.now() - lastT) / 864e5) : null;
+    const bigLoss = ev.filter(e => e.r != null && e.r <= -1.5).length;
+    const revenge = (st.diario || []).filter(d => /revenge|f[uú]ria|m[aã]o de alface|descontrol|tilt/i.test((d.reflexao || "") + " " + (d.dificuldade || ""))).length;
+    const alerts = [];
+    if (curDD >= 5) alerts.push({ tone: "red", label: `Drawdown −${curDD.toFixed(1)}R` });
+    if (stat.lastSign < 0 && stat.curStreak >= 3) alerts.push({ tone: "red", label: `${stat.curStreak} loss seguidos` });
+    if (daysIdle != null && daysIdle >= 10) alerts.push({ tone: "gold", label: `Parado há ${daysIdle}d` });
+    if (revenge > 0) alerts.push({ tone: "purple", label: `${revenge}× revenge/descontrole` });
+    else if (bigLoss > 0) alerts.push({ tone: "gold", label: `${bigLoss} perdas > 1.5R` });
+    return { st, stat, lastT, curDD, daysIdle, alerts };
+  });
+  const ativos = rows.filter(r => r.stat.n > 0);
+
+  const nAtivos = ativos.length;
+  const lucrativos = ativos.filter(r => r.stat.somaR > 0).length;
+  const avg = (f) => nAtivos ? ativos.reduce((s, r) => s + f(r), 0) / nAtivos : 0;
+  const somaRTotal = ativos.reduce((s, r) => s + r.stat.somaR, 0);
+
+  const monthSet = {};
+  ativos.forEach(r => Object.entries(r.stat.byMonth).forEach(([m, v]) => { monthSet[m] = (monthSet[m] || 0) + v; }));
+  const months = Object.keys(monthSet).sort();
+  let cumAvg = 0; const curve = [0];
+  months.forEach(m => { cumAvg += monthSet[m] / (nAtivos || 1); curve.push(+cumAvg.toFixed(2)); });
+
+  const sorters = { somaR: r => r.stat.somaR, winRate: r => r.stat.winRate, sqn: r => r.stat.sqn, payoff: r => r.stat.payoff };
+  const ranked = [...ativos].sort((a, b) => sorters[sortKey](b) - sorters[sortKey](a));
+  const atencao = rows.filter(r => r.alerts.length).sort((a, b) => b.curDD - a.curDD);
+
+  const chip = (active) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid " + (active ? T.lineGold : T.line), background: active ? T.goldSoft : "transparent", color: active ? T.gold : T.mut });
+
+  return (
+    <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Cabeçalho + toggle */}
+      <Card style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ fontSize: 13, color: T.dim }}>
+          <b style={{ color: T.text }}>{all.length}</b> alunos · <b style={{ color: T.text }}>{nAtivos}</b> com operações · <b style={{ color: T.green }}>{lucrativos}</b> lucrativos
+        </div>
+        <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
+          <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative" }}>
+            <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b" }} />
+          </span>
+          Incluir operações da Carteira
+        </button>
+      </Card>
+
+      {nAtivos === 0 ? <EmptyState icon="👥" title="Sem dados da turma" desc="Nenhum aluno registrou operações ainda. Gere a conta demo no painel Clientes para testar." /> : <>
+      {/* Médias da turma */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <Stat label="Acerto médio" value={(avg(r => r.stat.winRate) * 100).toFixed(1) + "%"} tone="gold" />
+        <Stat label="Payoff médio" value={avg(r => r.stat.payoff).toFixed(2)} tone={avg(r => r.stat.payoff) >= 1 ? "green" : "red"} />
+        <Stat label="SQN médio" value={avg(r => r.stat.sqn).toFixed(2)} tone={tone(sqnBand(avg(r => r.stat.sqn)).tone) === T.green ? "green" : "gold"} />
+        <Stat label="Expectativa média" value={fmtR(avg(r => r.stat.expectativa), 3)} tone={avg(r => r.stat.expectativa) >= 0 ? "green" : "red"} />
+        <Stat label="R acumulado (turma)" value={fmtR(somaRTotal, 1)} tone={somaRTotal >= 0 ? "green" : "red"} />
+        <Stat label="R médio / aluno" value={fmtR(somaRTotal / (nAtivos || 1), 1)} tone={somaRTotal >= 0 ? "green" : "red"} />
+      </div>
+
+      {/* Curva média da turma */}
+      <Curve points={curve} title="Curva de capital média da turma (R por mês, acumulado)" total={cumAvg}
+        sub={<span>R médio acumulado / aluno <b style={{ color: signTone(cumAvg), fontFamily: T.mono }}>{fmtR(cumAvg, 1)}</b></span>} unit="turma" />
+
+      {/* Painel de Atenção */}
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>🚨 Painel de Atenção <span style={{ fontSize: 12, color: T.dim, fontWeight: 400 }}>· quem precisa de coaching</span></div>
+        {atencao.length === 0
+          ? <div style={{ padding: 22, textAlign: "center", fontSize: 14, color: T.green }}>Nenhum alerta no momento 🎉 a turma está saudável.</div>
+          : atencao.map(r => (
+            <div key={r.st.user} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid " + T.line, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{r.st.name} <span style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>· {r.st.user}</span></div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{r.alerts.map((a, i) => <Badge key={i} tone={a.tone}>{a.label}</Badge>)}</div>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setAluno(r.st)}>Ver aluno →</Button>
+            </div>
+          ))}
+      </Card>
+
+      {/* Ranking */}
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Ranking da turma</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: T.dim }}>ORDENAR</span>
+            {RANK_KEYS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setSortKey(k)} style={chip(sortKey === k)}>{l}</button>)}
+          </div>
+        </div>
+        <div className="fh-scroll-x">
+          <div style={{ minWidth: 760 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 70px 70px 80px 70px 70px 90px", gap: 8, padding: "9px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
+              <div>#</div><div>ALUNO</div><div style={{ textAlign: "right" }}>OPS</div><div style={{ textAlign: "right" }}>ACERTO</div><div style={{ textAlign: "right" }}>R ACUM</div><div style={{ textAlign: "right" }}>SQN</div><div style={{ textAlign: "right" }}>PAYOFF</div><div></div>
+            </div>
+            {ranked.map((r, i) => (
+              <div key={r.st.user} onClick={() => setAluno(r.st)} role="button" tabIndex={0}
+                onKeyDown={e => { if (e.key === "Enter") setAluno(r.st); }}
+                style={{ display: "grid", gridTemplateColumns: "28px 1fr 70px 70px 80px 70px 70px 90px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono, cursor: "pointer" }}
+                className="fh-navitem">
+                <div style={{ fontSize: 13, color: i < 3 ? T.gold : T.dim, fontWeight: 700 }}>{i + 1}</div>
+                <div style={{ fontFamily: T.sans }}>
+                  <div style={{ fontSize: 14, color: T.text, fontWeight: 600 }}>{r.st.name}</div>
+                  {r.alerts.length > 0 && <span style={{ fontSize: 11, color: T.red }}>⚠ {r.alerts.length} alerta{r.alerts.length > 1 ? "s" : ""}</span>}
+                </div>
+                <div style={{ textAlign: "right", fontSize: 13, color: T.dim }}>{r.stat.n}</div>
+                <div style={{ textAlign: "right", fontSize: 13, color: T.mut }}>{(r.stat.winRate * 100).toFixed(0)}%</div>
+                <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: signTone(r.stat.somaR) }}>{fmtR(r.stat.somaR, 1)}</div>
+                <div style={{ textAlign: "right", fontSize: 13, color: tone(r.stat.sqnBand.tone) }}>{r.stat.sqn.toFixed(2)}</div>
+                <div style={{ textAlign: "right", fontSize: 13, color: r.stat.payoff >= 1 ? T.green : T.red }}>{r.stat.payoff.toFixed(2)}</div>
+                <div style={{ textAlign: "right" }}><span style={{ fontSize: 12, color: T.gold }}>Ver →</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+      </>}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [active, setActive] = useState("panorama");
@@ -1950,6 +2129,7 @@ export default function App() {
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
         {current === "trades" && <TradesScreen session={session} />}
         {current === "dashboard" && <DashboardScreen session={session} />}
+        {current === "turma" && <TurmaScreen session={session} />}
         {current === "clientes" && <ClientesScreen session={session} />}
       </Shell>
     </>
