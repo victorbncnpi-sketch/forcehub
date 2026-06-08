@@ -1254,8 +1254,19 @@ function ClientesScreen({ session }) {
     if (seeding) return;
     setSeeding(true); setDemoMsg(null);
     try {
-      const j = await api.post("/api/seed-demo", {});
-      setDemoMsg({ ok: true, text: `Conta demo pronta — login "${j.user}" / senha "${j.pass}". Populada com ${j.trades} trades, ${j.diario} lançamentos do Conselheiro e ${j.positions} posições (1R = R$ ${j.valorR}). Saia e entre como ${j.user} para validar.` });
+      const j = await api.post("/api/seed-demo", { action: "seed" });
+      setDemoMsg({ ok: true, text: `Turma demo pronta: ${j.count} alunos criados/atualizados (senha de todos: "${j.pass}"). Abra a aba Turma para o painel do mentor, ou entre como "demo" para o dashboard pessoal.` });
+      await load();
+    } catch (e) { setDemoMsg({ ok: false, text: e.message }); }
+    finally { setSeeding(false); }
+  };
+  const deleteDemo = async () => {
+    if (seeding) return;
+    if (!window.confirm("Apagar TODOS os alunos e dados de teste (contas demo)? Os usuários reais não são afetados.")) return;
+    setSeeding(true); setDemoMsg(null);
+    try {
+      const j = await api.post("/api/seed-demo", { action: "delete" });
+      setDemoMsg({ ok: true, text: `Dados de teste removidos: ${j.removed} conta(s) demo apagada(s).` });
       await load();
     } catch (e) { setDemoMsg({ ok: false, text: e.message }); }
     finally { setSeeding(false); }
@@ -1329,7 +1340,8 @@ function ClientesScreen({ session }) {
           {!isSuper && <span style={{ marginLeft: 6 }}>· você gerencia apenas clientes</span>}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {isSuper && <Button variant="ghost" size="sm" onClick={seedDemo} disabled={seeding} title="Cria/atualiza a conta de teste com dados fictícios">{seeding ? "⟳ Gerando..." : "🧪 Conta demo"}</Button>}
+          {isSuper && <Button variant="ghost" size="sm" onClick={seedDemo} disabled={seeding} title="Cria/atualiza uma turma fictícia de teste">{seeding ? "⟳..." : "🧪 Turma demo"}</Button>}
+          {isSuper && <Button variant="ghost" size="sm" onClick={deleteDemo} disabled={seeding} title="Remove todos os alunos/dados de teste" style={{ color: T.red, borderColor: T.red }}>🗑 Limpar testes</Button>}
           <Button size="sm" onClick={openCreate}>+ Novo {isSuper ? "usuário" : "cliente"}</Button>
         </div>
       </div>
@@ -1970,7 +1982,7 @@ function TurmaScreen({ session }) {
     if (stat.lastSign < 0 && stat.curStreak >= 3) alerts.push({ tone: "red", label: `${stat.curStreak} loss seguidos` });
     if (daysIdle != null && daysIdle >= 10) alerts.push({ tone: "gold", label: `Parado há ${daysIdle}d` });
     if (revenge > 0) alerts.push({ tone: "purple", label: `${revenge}× revenge/descontrole` });
-    else if (bigLoss > 0) alerts.push({ tone: "gold", label: `${bigLoss} perdas > 1.5R` });
+    else if (bigLoss >= 3) alerts.push({ tone: "gold", label: `${bigLoss} perdas > 1.5R` });
     return { st, stat, lastT, curDD, daysIdle, alerts };
   });
   const ativos = rows.filter(r => r.stat.n > 0);

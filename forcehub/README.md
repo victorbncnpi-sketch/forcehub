@@ -132,3 +132,10 @@ inicial de usuários (super admin `victor` / `forcehub2026`). **Troque essa senh
 painel logo após o primeiro login.** As sementes ficam em `api/_auth.js`, fora
 do bundle do frontend.
 
+**Dados de teste (turma demo):** no painel **Clientes**, o super admin tem
+**🧪 Turma demo** (cria 8 alunos fictícios com perfis variados — campeão, em
+drawdown, indisciplinado, inativo, em maré de loss… — para validar o Dashboard
+e o Painel da Turma) e **🗑 Limpar testes** (remove todos eles de uma vez). As
+contas demo (senha `demo2026`) são marcadas com `demoSeed`, então a limpeza
+nunca afeta usuários reais. Lógica em `api/seed-demo.js`.
+
