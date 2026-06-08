@@ -473,15 +473,24 @@ function PanoramaScreen() {
 }
 
 // ─── Linha de posição ───────────────────────────────────────────────────────────
+// Direção de uma recomendação/posição. Compat: se não houver campo `direcao`,
+// deduz por alvo vs entrada (alvo abaixo da entrada = venda/short).
+const tradeDir = (x) => (x.direcao === "VENDA" || (x.direcao == null && Number(x.alvo) < Number(x.entrada))) ? "VENDA" : "COMPRA";
+const tradePot = (x) => { const r = ((x.alvo - x.entrada) / x.entrada) * 100; return tradeDir(x) === "VENDA" ? -r : r; };   // ganho até o alvo (%)
+const tradeRisco = (x) => { const r = ((x.stop - x.entrada) / x.entrada) * 100; return tradeDir(x) === "VENDA" ? -r : r; }; // risco até o stop (%) — negativo
+const closePct = (p, saida) => { const r = ((saida - p.entrada) / p.entrada) * 100; return tradeDir(p) === "VENDA" ? -r : r; };
+
 function PosicaoRow({ p, onFechar }) {
   const [saida, setSaida] = useState("");
   const isAberta = p.status === "ABERTA";
-  const pct = p.precoSaida != null ? (((p.precoSaida - p.entrada) / p.entrada) * 100).toFixed(2) : null;
+  const venda = tradeDir(p) === "VENDA";
+  const pct = p.precoSaida != null ? closePct(p, p.precoSaida).toFixed(2) : null;
   const pctColor = pct == null ? T.dim : parseFloat(pct) >= 0 ? T.green : T.red;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 700, color: T.gold }}>{p.ticker}</div>
+        <div style={{ fontSize: 10, color: venda ? T.red : T.green, fontWeight: 700 }}>{venda ? "▼ VENDA" : "▲ COMPRA"}</div>
         <div style={{ fontSize: 11, color: T.dim }}>{p.dataEntrada}</div>
       </div>
       <div style={{ fontSize: 13, color: T.mut, fontFamily: T.sans }}>{p.nome || "—"}</div>
@@ -513,7 +522,7 @@ function CarteiraScreen({ canWrite }) {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState(null);
-  const [form, setForm] = useState({ ticker: "", nome: "", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
+  const [form, setForm] = useState({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
   const [loadError, setLoadError] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const idRef = useRef(1);
@@ -548,10 +557,10 @@ function CarteiraScreen({ canWrite }) {
   const addAcao = () => {
     const e = parseFloat(form.entrada), a = parseFloat(form.alvo), s = parseFloat(form.stop);
     if (!form.ticker || !e || !a || !s) return;
-    const nova = { id: idRef.current++, ticker: form.ticker.toUpperCase(), nome: form.nome, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false };
+    const nova = { id: idRef.current++, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false };
     const next = [...acoes, nova];
     setAcoes(next); saveCarteira(next, posicoes);
-    setForm({ ticker: "", nome: "", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
+    setForm({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "" });
     setShowForm(false);
   };
   const removeAcao = (id) => {
@@ -559,7 +568,7 @@ function CarteiraScreen({ canWrite }) {
     setAcoes(next); saveCarteira(next, posicoes);
   };
   const addFromScan = (op) => {
-    const nova = { id: idRef.current++, ticker: op.ticker, nome: op.nome, entrada: op.entrada, alvo: op.alvo, stop: op.stop, qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true };
+    const nova = { id: idRef.current++, ticker: op.ticker, nome: op.nome, direcao: tradeDir(op), entrada: op.entrada, alvo: op.alvo, stop: op.stop, qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true };
     const nextAcoes = [...acoes, nova];
     const nextPos = [...posicoes, { ...nova, posId: idRef.current++, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null }];
     setAcoes(nextAcoes); setPosicoes(nextPos); saveCarteira(nextAcoes, nextPos);
@@ -568,7 +577,7 @@ function CarteiraScreen({ canWrite }) {
   const fecharPosicao = (posId, precoSaida) => {
     const nextPos = posicoes.map(p => {
       if (p.posId !== posId) return p;
-      const pct = ((precoSaida - p.entrada) / p.entrada) * 100;
+      const pct = closePct(p, precoSaida); // direção-aware (short inverte o sinal)
       return { ...p, status: "FECHADA", precoSaida, dataSaida: new Date().toLocaleDateString("pt-BR"), resultado: parseFloat(pct.toFixed(2)) };
     });
     setPosicoes(nextPos); saveCarteira(acoes, nextPos);
@@ -577,7 +586,7 @@ function CarteiraScreen({ canWrite }) {
     setScanning(true); setScanError(null); setScanResult(null);
     try {
       const today = new Date().toLocaleDateString("pt-BR");
-      const prompt = "Voce e analista tecnico B3 swing trade. Hoje: " + today + ". Use web_search: melhores acoes comprar B3 hoje oportunidade tecnica swing trade. RESPONDA EM PORTUGUES. Retorne APENAS JSON valido sem texto extra: {\"data\":\"" + today + "\",\"contexto\":\"resumo do mercado\",\"oportunidades\":[{\"ticker\":\"PETR4\",\"nome\":\"Petrobras PN\",\"entrada\":38.50,\"alvo\":40.50,\"stop\":37.20,\"potencial\":5.2,\"setup\":\"Rompimento\",\"racional\":\"Análise\",\"prazo\":\"2-3 dias\",\"risco\":\"Risco\"}]}";
+      const prompt = "Voce e analista tecnico B3 swing trade. Hoje: " + today + ". Use web_search: melhores oportunidades tecnicas de swing trade na B3 hoje, tanto de COMPRA quanto de VENDA (short). RESPONDA EM PORTUGUES. Inclua oportunidades nos DOIS sentidos quando houver. Em cada item, 'direcao' = 'COMPRA' ou 'VENDA'. Para COMPRA: alvo ACIMA da entrada e stop ABAIXO. Para VENDA: alvo ABAIXO da entrada e stop ACIMA. Retorne APENAS JSON valido sem texto extra: {\"data\":\"" + today + "\",\"contexto\":\"resumo do mercado\",\"oportunidades\":[{\"ticker\":\"PETR4\",\"nome\":\"Petrobras PN\",\"direcao\":\"COMPRA\",\"entrada\":38.50,\"alvo\":40.50,\"stop\":37.20,\"setup\":\"Rompimento\",\"racional\":\"Análise\",\"prazo\":\"2-3 dias\"},{\"ticker\":\"VALE3\",\"nome\":\"Vale ON\",\"direcao\":\"VENDA\",\"entrada\":60.00,\"alvo\":57.00,\"stop\":61.50,\"setup\":\"Perda de suporte\",\"racional\":\"Análise\",\"prazo\":\"2-4 dias\"}]}";
       const parsed = await aiSearchJSON(prompt, ['"oportunidades"', '"oportunidade"', '"opportunities"']);
       const ops = parsed.oportunidades || parsed.oportunidade || parsed.opportunities || [];
       if (!ops.length) throw new Error("Nenhuma oportunidade encontrada. Tente novamente.");
@@ -628,15 +637,17 @@ function CarteiraScreen({ canWrite }) {
               </div>
               <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
                 {(scanResult.oportunidades || []).map((op, i) => {
+                  const venda = tradeDir(op) === "VENDA";
                   const rr = op.entrada && op.stop ? Math.abs((op.alvo - op.entrada) / (op.entrada - op.stop)) : 0;
-                  const pot = op.entrada ? (((op.alvo - op.entrada) / op.entrada) * 100).toFixed(1) : "0";
+                  const pot = op.entrada ? tradePot(op).toFixed(1) : "0";
                   return (
                     <div key={i} style={{ background: T.inset, border: "1px solid " + T.line, borderRadius: 10, padding: "14px 16px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                           <span style={{ fontSize: 18, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{op.ticker}</span>
                           <span style={{ fontSize: 13, color: T.mut }}>{op.nome}</span>
-                          {op.prazo && <Badge tone="green">{op.prazo}</Badge>}
+                          <Badge tone={venda ? "red" : "green"}>{venda ? "▼ VENDA" : "▲ COMPRA"}</Badge>
+                          {op.prazo && <Badge tone="mut">{op.prazo}</Badge>}
                         </div>
                         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                           <span style={{ fontSize: 16, fontWeight: 700, color: T.green, fontFamily: T.mono }}>+{pot}%</span>
@@ -673,9 +684,10 @@ function CarteiraScreen({ canWrite }) {
           {acoes.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
               {acoes.map(a => {
+                const venda = tradeDir(a) === "VENDA";
                 const rr = Math.abs((a.alvo - a.entrada) / (a.entrada - a.stop));
-                const pot = (((a.alvo - a.entrada) / a.entrada) * 100).toFixed(1);
-                const sp = (((a.stop - a.entrada) / a.entrada) * 100).toFixed(1);
+                const pot = tradePot(a).toFixed(1);
+                const sp = tradeRisco(a).toFixed(1);
                 return (
                   <Card key={a.id} className="fh-card-hover" style={{ overflow: "hidden" }}>
                     <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: T.panel2, borderBottom: "1px solid " + T.line }}>
@@ -685,7 +697,7 @@ function CarteiraScreen({ canWrite }) {
                         {a.ai && <Badge tone="green">IA</Badge>}
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <Badge tone={a.alvo > a.entrada ? "green" : "red"}>{a.alvo > a.entrada ? "▲ COMPRA" : "▼ VENDA"}</Badge>
+                        <Badge tone={venda ? "red" : "green"}>{venda ? "▼ VENDA" : "▲ COMPRA"}</Badge>
                         {canWrite && <Button variant="ghost" size="sm" onClick={() => removeAcao(a.id)} style={{ padding: "4px 9px" }}>✕</Button>}
                       </div>
                     </div>
@@ -745,6 +757,14 @@ function CarteiraScreen({ canWrite }) {
               <Field label="Ticker"><Input mono value={form.ticker} onChange={e => setF("ticker", e.target.value.toUpperCase())} placeholder="PETR4" /></Field>
               <Field label="Empresa"><Input value={form.nome} onChange={e => setF("nome", e.target.value)} placeholder="Petrobras PN" /></Field>
             </div>
+            <Field label="Direção" hint="Compra: alvo acima da entrada · Venda: alvo abaixo da entrada.">
+              <div style={{ display: "flex", gap: 8 }}>
+                {[["COMPRA", "▲ Compra", T.green], ["VENDA", "▼ Venda", T.red]].map(([v, l, c]) => {
+                  const on = form.direcao === v;
+                  return <button key={v} className="fh-btn" onClick={() => setF("direcao", v)} style={{ flex: 1, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? c + "88" : T.line), background: on ? c + "1a" : "transparent", color: on ? c : T.mut }}>{l}</button>;
+                })}
+              </div>
+            </Field>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
               {[["Entrada (R$)", "entrada", T.text], ["Alvo (R$)", "alvo", T.green], ["Stop (R$)", "stop", T.red]].map(([l, k, c]) => (
                 <Field key={k} label={l}><Input mono type="number" step="0.01" value={form[k]} onChange={e => setF(k, e.target.value)} placeholder="0.00" style={{ color: c }} /></Field>
@@ -757,8 +777,8 @@ function CarteiraScreen({ canWrite }) {
             {calcRR(form.entrada, form.alvo, form.stop) !== null && (
               <div style={{ background: T.inset, border: "1px solid " + T.line, borderRadius: 10, padding: "14px 18px", display: "flex", gap: 28 }}>
                 <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>R:R</div><div style={{ fontSize: 24, fontWeight: 800, color: rrColor(calcRR(form.entrada, form.alvo, form.stop)), fontFamily: T.mono }}>1:{calcRR(form.entrada, form.alvo, form.stop).toFixed(2)}</div></div>
-                <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>Potencial</div><div style={{ fontSize: 19, color: T.green, fontFamily: T.mono }}>+{(((parseFloat(form.alvo) - parseFloat(form.entrada)) / parseFloat(form.entrada)) * 100).toFixed(1)}%</div></div>
-                <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>Risco</div><div style={{ fontSize: 19, color: T.red, fontFamily: T.mono }}>{(((parseFloat(form.stop) - parseFloat(form.entrada)) / parseFloat(form.entrada)) * 100).toFixed(1)}%</div></div>
+                <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>Potencial</div><div style={{ fontSize: 19, color: T.green, fontFamily: T.mono }}>{(tradePot(form) >= 0 ? "+" : "") + tradePot(form).toFixed(1)}%</div></div>
+                <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>Risco</div><div style={{ fontSize: 19, color: T.red, fontFamily: T.mono }}>{tradeRisco(form).toFixed(1)}%</div></div>
               </div>
             )}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
