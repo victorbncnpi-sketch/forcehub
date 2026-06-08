@@ -2,9 +2,9 @@
 // GET  -> { ok, recomendacoes, posicoes }
 // POST -> { recomendacoes, posicoes } salva o estado completo
 //
-// Acesso: GET exige sessão válida; POST (edição da carteira) exige admin.
+// Acesso: GET exige a permissão "carteira"; POST exige "carteira_write".
 import { getRedis } from "./_redis";
-import { getSession } from "./_auth";
+import { getSession, sessionCan } from "./_auth";
 
 const KEY = "forcehub:carteira";
 
@@ -19,6 +19,7 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
+      if (!sessionCan(sess, "carteira")) return res.status(403).json({ ok: false, error: "Sem acesso à carteira." });
       const data = (await redis.get(KEY)) || {};
       return res.status(200).json({
         ok: true,
@@ -28,7 +29,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
-      if (sess.role !== "admin") return res.status(403).json({ ok: false, error: "Apenas administradores podem editar a carteira." });
+      if (!sessionCan(sess, "carteira_write")) return res.status(403).json({ ok: false, error: "Sem permissão para editar a carteira." });
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
       const recomendacoes = Array.isArray(body?.recomendacoes) ? body.recomendacoes : [];

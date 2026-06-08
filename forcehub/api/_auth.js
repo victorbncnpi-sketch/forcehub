@@ -9,14 +9,23 @@ const SESS_PREFIX = "forcehub:session:";
 export const SESSION_TTL = 60 * 60 * 24 * 7; // 7 dias
 const COOKIE = "fh_session";
 
+// Super admin: irrestrito e imutável (ninguém edita/rebaixa/remove).
+export const SUPERADMIN = "victor";
+export const ROLES = ["client", "moderator", "superadmin"];
+
+// Permissões granulares por página (controlam clientes). Staff (moderador/super
+// admin) tem todas implicitamente.
+export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro"];
+export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro"];
+
 // Cadastro inicial — usado apenas se o banco ainda não tiver usuários.
 // Estas senhas são só a semente; troque-as pelo painel admin após o 1º login.
 const SEED = [
-  { user: "victor",       pass: "forcehub2026", role: "admin",  expiry: null,         name: "Victor Noronha" },
-  { user: "cliente1",     pass: "xp2026c1",     role: "client", expiry: "2027-06-01", name: "Cliente 1" },
-  { user: "cliente2",     pass: "xp2026c2",     role: "client", expiry: "2027-06-01", name: "Cliente 2" },
-  { user: "andre.gain",   pass: "xp2026ag",     role: "client", expiry: "2027-06-01", name: "Andre Gain" },
-  { user: "maria.emilia", pass: "xp2026me",     role: "client", expiry: "2027-06-01", name: "Maria Emilia" },
+  { user: "victor",       pass: "forcehub2026", role: "superadmin", expiry: null,         name: "Victor Noronha" },
+  { user: "cliente1",     pass: "xp2026c1",     role: "client",     expiry: "2027-06-01", name: "Cliente 1" },
+  { user: "cliente2",     pass: "xp2026c2",     role: "client",     expiry: "2027-06-01", name: "Cliente 2" },
+  { user: "andre.gain",   pass: "xp2026ag",     role: "client",     expiry: "2027-06-01", name: "Andre Gain" },
+  { user: "maria.emilia", pass: "xp2026me",     role: "client",     expiry: "2027-06-01", name: "Maria Emilia" },
 ];
 
 // ─── Senha (scrypt) ───────────────────────────────────────────────────────────
@@ -33,14 +42,50 @@ export function verifyPassword(pass, stored) {
   return h.length === hb.length && timingSafeEqual(h, hb);
 }
 
-// ─── Modelagem ──────────────────────────────────────────────────────────────
+// ─── Modelagem / permissões ───────────────────────────────────────────────────
+export function isStaff(role) { return role === "superadmin" || role === "moderator"; }
+
+// Permissões efetivas: staff recebe todas as páginas; cliente usa o próprio array.
+export function effectivePerms(u) {
+  if (!u) return [];
+  if (isStaff(u.role)) return [...PAGE_CAPS];
+  return Array.isArray(u.perms) ? u.perms.filter(p => PAGE_CAPS.includes(p)) : [];
+}
+
+// Verifica uma capacidade a partir do payload de sessão ({ role, perms }) ou de
+// um usuário completo. Capacidades administrativas derivam do papel.
+export function sessionCan(s, cap) {
+  if (!s) return false;
+  if (s.role === "superadmin") return true;
+  if (cap === "manage_staff") return false;            // só super admin
+  if (cap === "manage_clients") return s.role === "moderator";
+  const perms = Array.isArray(s.perms) ? s.perms : effectivePerms(s);
+  return perms.includes(cap);
+}
+
 export function publicUser(u) {
-  return u ? { user: u.user, name: u.name, role: u.role, expiry: u.expiry || null } : null;
+  return u ? { user: u.user, name: u.name, role: u.role, expiry: u.expiry || null, perms: effectivePerms(u) } : null;
 }
 export function isExpired(u) {
   if (!u || !u.expiry) return false;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return new Date(u.expiry) < today;
+}
+
+// Normaliza/migra usuários para o modelo atual (papéis + perms). Retorna true se
+// algo mudou (para regravar). Migração do modelo antigo: role "admin" => super
+// admin (se for o victor) ou moderador; clientes ganham permissões padrão.
+function normalizeUsers(map) {
+  let changed = false;
+  for (const k of Object.keys(map)) {
+    const u = map[k];
+    if (!u || typeof u !== "object") continue;
+    if (u.user === SUPERADMIN && u.role !== "superadmin") { u.role = "superadmin"; changed = true; }
+    if (u.role === "admin") { u.role = u.user === SUPERADMIN ? "superadmin" : "moderator"; changed = true; }
+    if (!ROLES.includes(u.role)) { u.role = "client"; changed = true; }
+    if (u.role === "client" && !Array.isArray(u.perms)) { u.perms = [...DEFAULT_CLIENT_PERMS]; changed = true; }
+  }
+  return changed;
 }
 
 // ─── Armazenamento de usuários (semeia na primeira leitura) ───────────────────
@@ -51,8 +96,14 @@ export async function getUsers() {
   if (!map || typeof map !== "object" || Array.isArray(map) || !Object.keys(map).length) {
     map = {};
     for (const s of SEED) {
-      map[s.user] = { user: s.user, name: s.name, role: s.role, expiry: s.expiry, pass: hashPassword(s.pass), createdAt: Date.now() };
+      map[s.user] = {
+        user: s.user, name: s.name, role: s.role, expiry: s.expiry,
+        pass: hashPassword(s.pass), createdAt: Date.now(),
+        ...(s.role === "client" ? { perms: [...DEFAULT_CLIENT_PERMS] } : {}),
+      };
     }
+    await redis.set(USERS_KEY, map);
+  } else if (normalizeUsers(map)) {
     await redis.set(USERS_KEY, map);
   }
   return map;

@@ -87,12 +87,32 @@ carteira; cada cliente só acessa o próprio perfil/diário.
 | `api/users.js` | gestão de clientes (somente admin) |
 | `api/_auth.js` | hash de senha, cookies e sessões (utilitário) |
 
-**Cadastro de clientes:** feito pelo admin na própria interface (aba
-**Clientes**) — criar, editar, definir validade de acesso, redefinir senha e
-remover. Nenhuma alteração de código é necessária.
+**Papéis:**
+
+- **Super admin** (`victor`) — irrestrito e **imutável**: ninguém o edita,
+  rebaixa ou remove. Único que define papéis e permissões granulares.
+- **Moderador** — acesso total às páginas + gestão de **clientes** (não enxerga
+  nem altera outros moderadores/super admin, nem define permissões).
+- **Cliente** — acesso definido por **permissões por página**.
+
+**Permissões granulares (por página, só o super admin edita):**
+
+| Permissão | Libera |
+|-----------|--------|
+| `panorama` | Ver o Panorama de Mercado |
+| `carteira` | **Ler** recomendações + posições |
+| `carteira_write` | **Criar/editar** recomendações de compra/venda |
+| `conselheiro` | Usar O Conselheiro (IA) |
+
+Cada rota do backend valida a capacidade (ex.: `POST /api/carteira` exige
+`carteira_write`) e a navegação esconde o que o usuário não pode acessar.
+Cliente novo nasce com `panorama + carteira (ler) + conselheiro`.
+
+**Cadastro:** feito na aba **Clientes** — criar, editar, definir papel,
+permissões, validade de acesso, redefinir senha e remover. Sem mexer em código.
 
 **Primeiro acesso:** na primeira leitura, o banco é semeado com um conjunto
-inicial de usuários (admin `victor` / `forcehub2026`). **Troque essa senha pelo
+inicial de usuários (super admin `victor` / `forcehub2026`). **Troque essa senha pelo
 painel logo após o primeiro login.** As sementes ficam em `api/_auth.js`, fora
 do bundle do frontend.
 

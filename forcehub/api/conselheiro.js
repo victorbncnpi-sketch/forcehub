@@ -2,7 +2,7 @@
 // GET  ?user=victor          -> { ok, perfil, diario }
 // POST ?user=victor { perfil?, diario? } -> merge e salva
 import { getRedis } from "./_redis";
-import { getSession } from "./_auth";
+import { getSession, sessionCan } from "./_auth";
 
 const keyFor = (user) => "forcehub:conselheiro:" + user;
 
@@ -14,6 +14,7 @@ export default async function handler(req, res) {
 
   const sess = await getSession(req);
   if (!sess) return res.status(401).json({ ok: false, error: "Não autenticado." });
+  if (!sessionCan(sess, "conselheiro")) return res.status(403).json({ ok: false, error: "Sem acesso ao Conselheiro." });
 
   const user = (req.query.user || "").toString().trim().toLowerCase();
   if (!user) {

@@ -1,6 +1,29 @@
 import { useState, useEffect, useRef } from "react";
 import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
 
+// ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
+// Papéis: superadmin (irrestrito) · moderator (gere clientes) · client.
+// Capacidades de página: panorama · carteira (ler) · carteira_write · conselheiro.
+// Capacidades administrativas derivam do papel. O backend é a fonte de verdade;
+// aqui só escondemos o que o usuário não pode acessar.
+const CAP_LABELS = {
+  panorama: "Panorama de Mercado",
+  carteira: "Carteira — ler recomendações",
+  carteira_write: "Carteira — criar/editar recomendações",
+  conselheiro: "O Conselheiro (IA)",
+};
+const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro"];
+const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro"];
+const ROLE_LABEL = { superadmin: "Super admin", moderator: "Moderador", client: "Cliente" };
+
+function can(session, cap) {
+  if (!session) return false;
+  if (session.role === "superadmin") return true;
+  if (cap === "manage_clients") return session.role === "moderator";
+  if (cap === "manage_staff") return false;
+  return Array.isArray(session.perms) && session.perms.includes(cap);
+}
+
 // ─── Camada de dados (backend via /api/*) ─────────────────────────────────────
 // Autenticação e cadastro de usuários agora ficam no backend (api/auth.js,
 // api/users.js). As senhas nunca chegam ao frontend; a sessão é um cookie
@@ -130,17 +153,24 @@ function LoginScreen({ onLogin }) {
 
 // ─── Shell com navegação lateral ──────────────────────────────────────────────
 const NAV = [
-  { key: "panorama",    icon: "panorama",    label: "Panorama",    title: "Panorama de Mercado" },
-  { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada" },
-  { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro" },
-  { key: "clientes",    icon: "users",       label: "Clientes",    title: "Gestão de Clientes", admin: true },
+  { key: "panorama",    icon: "panorama",    label: "Panorama",    title: "Panorama de Mercado",   cap: "panorama" },
+  { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada",  cap: "carteira" },
+  { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro",         cap: "conselheiro" },
+  { key: "clientes",    icon: "users",       label: "Clientes",    title: "Gestão de Clientes",    cap: "manage_clients" },
 ];
+
+// Primeira página acessível ao usuário (para o destino padrão pós-login).
+function firstAllowed(session) {
+  const n = NAV.find(n => can(session, n.cap));
+  return n ? n.key : "panorama";
+}
 
 function Shell({ session, active, onNavigate, onLogout, children }) {
   const [time, setTime] = useState(new Date());
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
-  const isAdmin = session?.role === "admin";
-  const nav = NAV.filter(n => !n.admin || isAdmin);
+  const roleLabel = ROLE_LABEL[session?.role] || "Cliente";
+  const roleTone = session?.role === "superadmin" ? "gold" : session?.role === "moderator" ? "blue" : null;
+  const nav = NAV.filter(n => can(session, n.cap));
   const cur = NAV.find(n => n.key === active);
   return (
     <div className="fh-shell">
@@ -159,8 +189,8 @@ function Shell({ session, active, onNavigate, onLogout, children }) {
         <div style={{ padding: 14, borderTop: "1px solid " + T.line }}>
           <div className="fh-side-detail" style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 13, color: T.text, fontWeight: 600 }}>{session?.name}</div>
-            {isAdmin
-              ? <Badge tone="gold" style={{ marginTop: 6 }}>● ADMIN</Badge>
+            {roleTone
+              ? <Badge tone={roleTone} style={{ marginTop: 6 }}>● {roleLabel.toUpperCase()}</Badge>
               : session?.expiry && <div style={{ fontSize: 11, color: T.dim, marginTop: 4 }}>acesso até {new Date(session.expiry).toLocaleDateString("pt-BR")}</div>}
           </div>
           <Button variant="ghost" size="sm" onClick={onLogout} style={{ width: "100%" }}>Sair</Button>
@@ -475,10 +505,10 @@ function PosicaoRow({ p, onFechar }) {
 }
 
 // ─── Carteira Recomendada ─────────────────────────────────────────────────────
-function CarteiraScreen({ isAdmin }) {
+function CarteiraScreen({ canWrite }) {
   const [acoes, setAcoes] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
-  const [aba, setAba] = useState(isAdmin ? "carteira" : "posicoes");
+  const [aba, setAba] = useState("carteira");
   const [showForm, setShowForm] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
@@ -561,15 +591,18 @@ function CarteiraScreen({ isAdmin }) {
   const resultadoTotal = fechadas.length ? (fechadas.reduce((s, p) => s + p.resultado, 0) / fechadas.length) : 0;
 
   const tabLabel = (icon, text) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name={icon} size={15} /> {text}</span>;
-  const tabs = isAdmin
-    ? [{ key: "carteira", label: tabLabel("list", "Recomendações") }, { key: "posicoes", label: tabLabel("positions", "Posições (" + abertas + ")") }]
-    : [{ key: "posicoes", label: tabLabel("positions", "Posições (" + abertas + ")") }];
+  // Recomendações são visíveis a quem tem leitura (cap "carteira"); os controles
+  // de criar/buscar/excluir abaixo é que exigem "carteira_write".
+  const tabs = [
+    { key: "carteira", label: tabLabel("list", "Recomendações") },
+    { key: "posicoes", label: tabLabel("positions", "Posições (" + abertas + ")") },
+  ];
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
         <Tabs items={tabs} value={aba} onChange={setAba} />
-        {isAdmin && (
+        {canWrite && (
           <div style={{ display: "flex", gap: 10 }}>
             <Button variant="success" size="sm" onClick={scan} disabled={scanning}>{scanning ? "⟳ Buscando..." : <><Icon name="search" size={14} /> Buscar com IA</>}</Button>
             <Button size="sm" onClick={() => setShowForm(true)}>+ Nova recomendação</Button>
@@ -630,8 +663,8 @@ function CarteiraScreen({ isAdmin }) {
             </Card>
           )}
           {acoes.length === 0 && !scanResult && (
-            <EmptyState icon={<Icon name="carteira" size={40} color={T.dim} />} title="Nenhuma recomendação ainda" desc={isAdmin ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
-              {isAdmin && <>
+            <EmptyState icon={<Icon name="carteira" size={40} color={T.dim} />} title="Nenhuma recomendação ainda" desc={canWrite ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
+              {canWrite && <>
                 <Button variant="success" onClick={scan}><Icon name="search" size={14} /> Buscar com IA</Button>
                 <Button onClick={() => setShowForm(true)}>+ Adicionar manualmente</Button>
               </>}
@@ -653,7 +686,7 @@ function CarteiraScreen({ isAdmin }) {
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <Badge tone={a.alvo > a.entrada ? "green" : "red"}>{a.alvo > a.entrada ? "▲ COMPRA" : "▼ VENDA"}</Badge>
-                        {isAdmin && <Button variant="ghost" size="sm" onClick={() => removeAcao(a.id)} style={{ padding: "4px 9px" }}>✕</Button>}
+                        {canWrite && <Button variant="ghost" size="sm" onClick={() => removeAcao(a.id)} style={{ padding: "4px 9px" }}>✕</Button>}
                       </div>
                     </div>
                     <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -963,12 +996,19 @@ function ConselheiroScreen({ userId }) {
   );
 }
 
-// ─── Gestão de Clientes (admin) ───────────────────────────────────────────────
-function ClientesScreen({ currentUser }) {
+// ─── Gestão de Usuários (super admin / moderador) ─────────────────────────────
+const CAP_SHORT = { panorama: "Pan", carteira: "Cart", carteira_write: "Cart✎", conselheiro: "IA" };
+const roleBadge = (r) => r === "superadmin"
+  ? <Badge tone="gold">SUPER</Badge>
+  : r === "moderator" ? <Badge tone="blue">MODER.</Badge> : <Badge tone="mut">CLIENTE</Badge>;
+
+function ClientesScreen({ session }) {
+  const currentUser = session?.user;
+  const isSuper = session?.role === "superadmin";
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [modal, setModal] = useState(null); // { mode, user, name, pass, role, expiry }
+  const [modal, setModal] = useState(null); // { mode, user, name, pass, role, expiry, perms, targetSuper }
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -980,18 +1020,26 @@ function ClientesScreen({ currentUser }) {
   };
   useEffect(() => { load(); }, []);
 
-  const openCreate = () => { setFormError(""); setModal({ mode: "create", user: "", name: "", pass: "", role: "client", expiry: "" }); };
-  const openEdit = (u) => { setFormError(""); setModal({ mode: "edit", user: u.user, name: u.name || "", pass: "", role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "" }); };
+  const openCreate = () => { setFormError(""); setModal({ mode: "create", user: "", name: "", pass: "", role: "client", expiry: "", perms: [...DEFAULT_CLIENT_PERMS], targetSuper: false }); };
+  const openEdit = (u) => { setFormError(""); setModal({ mode: "edit", user: u.user, name: u.name || "", pass: "", role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "", perms: Array.isArray(u.perms) ? [...u.perms] : [...DEFAULT_CLIENT_PERMS], targetSuper: u.role === "superadmin" }); };
+
+  // Editar carteira pressupõe ler; tirar a leitura tira a edição.
+  const togglePerm = (c) => setModal(m => {
+    let perms = m.perms.includes(c) ? m.perms.filter(x => x !== c) : [...m.perms, c];
+    if (c === "carteira_write" && perms.includes("carteira_write") && !perms.includes("carteira")) perms.push("carteira");
+    if (c === "carteira" && !perms.includes("carteira")) perms = perms.filter(x => x !== "carteira_write");
+    return { ...m, perms };
+  });
 
   const save = async () => {
     if (saving) return;
     setSaving(true); setFormError("");
     try {
       const m = modal;
-      const payload = m.mode === "create"
-        ? { action: "create", user: m.user.trim().toLowerCase(), name: m.name.trim(), pass: m.pass, role: m.role, expiry: m.expiry || null }
-        : { action: "update", user: m.user, name: m.name.trim(), role: m.role, expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
-      await api.post("/api/users", payload);
+      const base = { user: m.user.trim().toLowerCase(), name: m.name.trim(), expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
+      // Papel/permissões só vão no payload quando o super admin edita um não-super.
+      const adminFields = (isSuper && !m.targetSuper) ? { role: m.role, ...(m.role === "client" ? { perms: m.perms } : {}) } : {};
+      await api.post("/api/users", { action: m.mode, ...base, ...adminFields });
       setModal(null);
       await load();
     } catch (e) { setFormError(e.message); }
@@ -1006,35 +1054,54 @@ function ClientesScreen({ currentUser }) {
 
   const expired = (e) => { if (!e) return false; const t = new Date(); t.setHours(0, 0, 0, 0); return new Date(e) < t; };
   const fmtExp = (e) => !e ? "sem prazo" : new Date(e).toLocaleDateString("pt-BR");
-  const COLS = "1fr 1.2fr 96px 130px 92px";
+  const showRoleField = isSuper && !modal?.targetSuper;
+  const showPerms = showRoleField && modal?.role === "client";
+  const COLS = "0.9fr 1fr 92px 1.15fr 116px 86px";
+
+  const permCell = (u) => {
+    if (u.role !== "client") return <span style={{ fontSize: 11, color: T.gold }}>acesso total</span>;
+    const ps = u.perms || [];
+    if (!ps.length) return <span style={{ fontSize: 11, color: T.dim }}>sem acesso</span>;
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {PAGE_CAPS.filter(c => ps.includes(c)).map(c => (
+          <span key={c} title={CAP_LABELS[c]} style={{ fontSize: 10, color: T.mut, background: T.inset, border: "1px solid " + T.line, borderRadius: 5, padding: "2px 6px" }}>{CAP_SHORT[c]}</span>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 14, color: T.dim }}>{list.length} {list.length === 1 ? "usuário cadastrado" : "usuários cadastrados"}</div>
-        <Button size="sm" onClick={openCreate}>+ Novo cliente</Button>
+        <div style={{ fontSize: 14, color: T.dim }}>
+          {list.length} {list.length === 1 ? "usuário" : "usuários"}
+          {!isSuper && <span style={{ marginLeft: 6 }}>· você gerencia apenas clientes</span>}
+        </div>
+        <Button size="sm" onClick={openCreate}>+ Novo {isSuper ? "usuário" : "cliente"}</Button>
       </div>
 
       {error && <Banner tone="red">{error}</Banner>}
 
-      {loading ? <Loading label="Carregando clientes..." />
-        : list.length === 0 ? <EmptyState icon={<Icon name="users" size={40} />} title="Nenhum cliente cadastrado" desc="Cadastre o primeiro acesso clicando em “Novo cliente”." />
+      {loading ? <Loading label="Carregando usuários..." />
+        : list.length === 0 ? <EmptyState icon={<Icon name="users" size={40} />} title="Nenhum usuário" desc="Cadastre o primeiro acesso clicando no botão acima." />
         : (
           <Card style={{ overflow: "hidden" }}>
             <div className="fh-scroll-x">
-              <div style={{ minWidth: 560 }}>
+              <div style={{ minWidth: 700 }}>
                 <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
-                  {["USUÁRIO", "NOME", "PAPEL", "ACESSO ATÉ", ""].map((h, i) => <div key={i} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: i === 4 ? "right" : "left" }}>{h}</div>)}
+                  {["USUÁRIO", "NOME", "PAPEL", "PERMISSÕES", "ACESSO ATÉ", ""].map((h, i) => <div key={i} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: i === 5 ? "right" : "left" }}>{h}</div>)}
                 </div>
                 {list.map(u => (
                   <div key={u.user} style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, alignItems: "center" }}>
                     <div style={{ fontSize: 14, color: T.text, fontFamily: T.mono, display: "flex", alignItems: "center", gap: 6, overflow: "hidden", textOverflow: "ellipsis" }}>{u.user}{u.user === currentUser && <span style={{ fontSize: 10, color: T.dim }}>(você)</span>}</div>
                     <div style={{ fontSize: 14, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name || "—"}</div>
-                    <div>{u.role === "admin" ? <Badge tone="gold">ADMIN</Badge> : <Badge tone="blue">CLIENTE</Badge>}</div>
+                    <div>{roleBadge(u.role)}</div>
+                    <div>{permCell(u)}</div>
                     <div style={{ fontSize: 13, color: expired(u.expiry) ? T.red : T.mut, fontFamily: T.mono }}>{fmtExp(u.expiry)}{expired(u.expiry) ? " ⚠" : ""}</div>
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                       <Button variant="ghost" size="sm" onClick={() => openEdit(u)} style={{ padding: "5px 10px" }}>Editar</Button>
-                      {u.user !== currentUser && <Button variant="danger" size="sm" onClick={() => remove(u)} style={{ padding: "5px 9px" }} title="Remover">×</Button>}
+                      {u.user !== currentUser && u.role !== "superadmin" && <Button variant="danger" size="sm" onClick={() => remove(u)} style={{ padding: "5px 9px" }} title="Remover">×</Button>}
                     </div>
                   </div>
                 ))}
@@ -1044,28 +1111,50 @@ function ClientesScreen({ currentUser }) {
         )}
 
       {modal && (
-        <Modal title={modal.mode === "create" ? "Novo cliente" : "Editar acesso — " + modal.user} onClose={() => setModal(null)} width={460}>
+        <Modal title={modal.mode === "create" ? "Novo usuário" : "Editar acesso — " + modal.user} onClose={() => setModal(null)} width={480}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field label="Usuário (login)" hint={modal.mode === "edit" ? "O login não pode ser alterado." : "Letras minúsculas, números, ponto, hífen ou underscore."}>
               <Input value={modal.user} disabled={modal.mode === "edit"} onChange={e => setModal(m => ({ ...m, user: e.target.value }))} placeholder="ex: joao.silva" mono />
             </Field>
             <Field label="Nome">
-              <Input value={modal.name} onChange={e => setModal(m => ({ ...m, name: e.target.value }))} placeholder="Nome do cliente" />
+              <Input value={modal.name} onChange={e => setModal(m => ({ ...m, name: e.target.value }))} placeholder="Nome do usuário" />
             </Field>
             <Field label={modal.mode === "create" ? "Senha" : "Nova senha"} hint={modal.mode === "edit" ? "Deixe em branco para manter a senha atual." : "Mínimo de 6 caracteres."}>
               <Input type="password" value={modal.pass} onChange={e => setModal(m => ({ ...m, pass: e.target.value }))} placeholder="••••••••" />
             </Field>
             <div style={{ display: "flex", gap: 12 }}>
-              <Field label="Papel" style={{ flex: 1 }}>
-                <select className="fh-input" value={modal.role} onChange={e => setModal(m => ({ ...m, role: e.target.value }))} style={{ width: "100%" }}>
-                  <option value="client">Cliente</option>
-                  <option value="admin">Administrador</option>
-                </select>
-              </Field>
+              {showRoleField && (
+                <Field label="Papel" style={{ flex: 1 }}>
+                  <select className="fh-input" value={modal.role} onChange={e => setModal(m => ({ ...m, role: e.target.value }))} style={{ width: "100%" }}>
+                    <option value="client">Cliente</option>
+                    <option value="moderator">Moderador</option>
+                  </select>
+                </Field>
+              )}
               <Field label="Acesso até (opcional)" style={{ flex: 1 }}>
                 <Input type="date" value={modal.expiry} onChange={e => setModal(m => ({ ...m, expiry: e.target.value }))} />
               </Field>
             </div>
+
+            {showPerms && (
+              <Field label="Permissões de acesso" hint="Quais páginas este cliente pode acessar.">
+                <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 2 }}>
+                  {PAGE_CAPS.map(c => {
+                    const on = modal.perms.includes(c);
+                    return (
+                      <label key={c} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 13.5, color: on ? T.text : T.mut }}>
+                        <input type="checkbox" checked={on} onChange={() => togglePerm(c)} style={{ accentColor: T.gold, width: 16, height: 16 }} />
+                        {CAP_LABELS[c]}
+                      </label>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
+            {modal.role === "moderator" && showRoleField && (
+              <div style={{ fontSize: 12, color: T.dim }}>Moderadores têm acesso total às páginas e podem gerenciar clientes.</div>
+            )}
+
             {formError && <div style={{ fontSize: 13, color: T.red }}>⚠ {formError}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
               <Button variant="ghost" onClick={() => setModal(null)}>Cancelar</Button>
@@ -1083,12 +1172,12 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [active, setActive] = useState("panorama");
   const [booting, setBooting] = useState(true);
-  const isAdmin = session?.role === "admin";
+  const enter = (s) => { setSession(s); setActive(firstAllowed(s)); };
 
   // Restaura a sessão a partir do cookie (mantém o login após recarregar).
   useEffect(() => {
     (async () => {
-      try { const j = await api.get("/api/auth"); if (j.user) setSession(j.user); }
+      try { const j = await api.get("/api/auth"); if (j.user) enter(j.user); }
       catch (e) { /* sem sessão */ }
       finally { setBooting(false); }
     })();
@@ -1098,6 +1187,9 @@ export default function App() {
     try { await api.post("/api/auth", { action: "logout" }); } catch (e) {}
     setSession(null); setActive("panorama");
   };
+
+  // Página efetiva: nunca renderiza algo que o usuário não pode acessar.
+  const current = NAV.find(n => n.key === active && can(session, n.cap)) ? active : firstAllowed(session);
 
   if (booting) {
     return (
@@ -1112,7 +1204,7 @@ export default function App() {
     return (
       <>
         <GlobalStyle />
-        <LoginScreen onLogin={s => { setSession(s); setActive("panorama"); }} />
+        <LoginScreen onLogin={enter} />
       </>
     );
   }
@@ -1120,11 +1212,11 @@ export default function App() {
   return (
     <>
       <GlobalStyle />
-      <Shell session={session} active={active} onNavigate={setActive} onLogout={logout}>
-        {active === "panorama" && <PanoramaScreen />}
-        {active === "carteira" && <CarteiraScreen isAdmin={isAdmin} />}
-        {active === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
-        {active === "clientes" && isAdmin && <ClientesScreen currentUser={session?.user} />}
+      <Shell session={session} active={current} onNavigate={setActive} onLogout={logout}>
+        {current === "panorama" && <PanoramaScreen />}
+        {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} />}
+        {current === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
+        {current === "clientes" && <ClientesScreen session={session} />}
       </Shell>
     </>
   );
