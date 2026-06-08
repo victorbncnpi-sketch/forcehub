@@ -15,18 +15,26 @@ Brapi e persistência/autenticação via Upstash Redis, todos no plano grátis).
   R:R), busca de oportunidades com IA e acompanhamento de posições.
 - **O Conselheiro** — coaching de trading com IA, perfil e diário de
   resultados (persistidos no Upstash Redis, por usuário, cross-device).
+- **Diário de Trades** — registro manual das próprias operações (em R-múltiplo
+  ou R$), unificado com o que O Conselheiro registra para o usuário.
+- **Dashboard de Performance** — estatísticas e insights inspirados em planilha
+  de mentoria: acerto, payoff, expectativa, **SQN** (System Quality Number),
+  drawdown, run-up, sequências, curva de capital (R e R$), resultado por mês e
+  quebras por ativo/direção/dia da semana — com análise gerada por IA. Permite
+  incluir ou não as posições da Carteira no cálculo.
 
 ## Arquitetura
 
 | Camada | Arquivo | Função |
 |--------|---------|--------|
-| Frontend | `src/App.jsx` | SPA React com login, menu, as 3 telas e o painel de Clientes |
+| Frontend | `src/App.jsx` | SPA React com login, menu, as telas (Panorama, Carteira, Conselheiro, Diário de Trades, Dashboard) e o painel de Clientes |
 | Autenticação | `api/auth.js` · `api/users.js` · `api/_auth.js` | Login por sessão (cookie httpOnly), senhas com hash scrypt no Redis, gestão de clientes (admin) |
 | Proxy de IA | `api/ai.js` | Encaminha à IA usando a chave do backend (Gemini ou Anthropic). A chave nunca vai ao navegador |
 | Cotações | `api/market-data.js` | Busca OHLC de WIN/WDO/IBOV ao vivo na Brapi |
 | Carteira | `api/carteira.js` | Recomendações compartilhadas (admin publica, clientes leem) + prints de gráfico em chaves próprias. Admin encerra a call → **track record oficial** (curva de capital compartilhada) |
 | Posições | `api/posicoes.js` | Posições **por usuário**: cada cliente aceita uma recomendação e acompanha o próprio resultado/curva de capital |
 | Conselheiro | `api/conselheiro.js` | Persiste perfil + diário por usuário (cross-device) |
+| Diário de Trades | `api/trades.js` | Operações **por usuário** (R-múltiplo + R$, com `valorR`). O Dashboard agrega isto com o diário do Conselheiro e, opcionalmente, as posições da Carteira |
 | Banco | `api/_redis.js` | Cliente Upstash Redis compartilhado |
 
 > As cotações são buscadas sob demanda (sem persistência). Login, carteira e
@@ -104,10 +112,12 @@ carteira; cada cliente só acessa o próprio perfil/diário.
 | `carteira` | **Ler** recomendações + posições |
 | `carteira_write` | **Criar/editar** recomendações de compra/venda |
 | `conselheiro` | Usar O Conselheiro (IA) |
+| `trades` | Usar o **Diário de Trades** e o **Dashboard de Performance** |
 
 Cada rota do backend valida a capacidade (ex.: `POST /api/carteira` exige
 `carteira_write`) e a navegação esconde o que o usuário não pode acessar.
-Cliente novo nasce com `panorama + carteira (ler) + conselheiro`.
+Cliente novo nasce com `panorama + carteira (ler) + conselheiro + trades`.
+Clientes antigos recebem `trades` automaticamente numa migração única.
 
 **Cadastro:** feito na aba **Clientes** — criar, editar, definir papel,
 permissões, validade de acesso, redefinir senha e remover. Sem mexer em código.

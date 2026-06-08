@@ -11,9 +11,10 @@ const CAP_LABELS = {
   carteira: "Carteira — ler recomendações",
   carteira_write: "Carteira — criar/editar recomendações",
   conselheiro: "O Conselheiro (IA)",
+  trades: "Diário de Trades + Dashboard",
 };
-const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro"];
-const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro"];
+const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades"];
+const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades"];
 const ROLE_LABEL = { superadmin: "Super admin", moderator: "Moderador", client: "Cliente" };
 
 function can(session, cap) {
@@ -156,6 +157,8 @@ const NAV = [
   { key: "panorama",    icon: "panorama",    label: "Panorama",    title: "Panorama de Mercado",   cap: "panorama" },
   { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada",  cap: "carteira" },
   { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro",         cap: "conselheiro" },
+  { key: "trades",      icon: "journal",     label: "Meus Trades", title: "Diário de Trades",      cap: "trades" },
+  { key: "dashboard",   icon: "dashboard",   label: "Dashboard",   title: "Dashboard de Performance", cap: "trades" },
   { key: "clientes",    icon: "users",       label: "Clientes",    title: "Gestão de Clientes",    cap: "manage_clients" },
 ];
 
@@ -1229,7 +1232,7 @@ function ConselheiroScreen({ userId }) {
 }
 
 // ─── Gestão de Usuários (super admin / moderador) ─────────────────────────────
-const CAP_SHORT = { panorama: "Pan", carteira: "Cart", carteira_write: "Cart✎", conselheiro: "IA" };
+const CAP_SHORT = { panorama: "Pan", carteira: "Cart", carteira_write: "Cart✎", conselheiro: "IA", trades: "Dash" };
 const roleBadge = (r) => r === "superadmin"
   ? <Badge tone="gold">SUPER</Badge>
   : r === "moderator" ? <Badge tone="blue">MODER.</Badge> : <Badge tone="mut">CLIENTE</Badge>;
@@ -1401,6 +1404,485 @@ function ClientesScreen({ session }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────────
+// ─── Diário de Trades + Dashboard de Performance ──────────────────────────────
+// Inspirado na planilha de mentoria: cada operação vira um "evento" medido em
+// R-múltiplo (risco) e, quando há o valor de 1R em R$, também no financeiro.
+// Fontes: registro manual (api/trades) + o que O Conselheiro registra
+// (api/conselheiro) + (opcional) as posições da carteira (api/posicoes).
+const ATIVOS_SUG = ["WIN", "WDO", "IND", "DOL", "PETR4", "VALE3", "BOVA11"];
+const FONTE_LABEL = { manual: "✍️ Manual", conselheiro: "🤖 Conselheiro", carteira: "📋 Carteira" };
+const FONTE_TONE = { manual: "gold", conselheiro: "purple", carteira: "blue" };
+const DOW = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+const toTime = (s) => {
+  if (!s) return 0;
+  const str = String(s).trim();
+  const iso = str.includes("/") ? str.split("/").reverse().join("-") : str.slice(0, 10);
+  const t = new Date(iso + "T00:00:00").getTime();
+  return isNaN(t) ? 0 : t;
+};
+const ymOf = (t) => { const d = new Date(t); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); };
+const fmtR = (v, dp = 2) => (v >= 0 ? "+" : "") + Number(v).toFixed(dp) + "R";
+const fmtBRL = (v) => (v < 0 ? "−R$ " : "R$ ") + Math.abs(Number(v)).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dmy = (t) => new Date(t).toLocaleDateString("pt-BR");
+const signTone = (v) => v > 0 ? T.green : v < 0 ? T.red : T.mut;
+const TONE_COLOR = { gold: T.gold, green: T.green, red: T.red, blue: T.blue, mut: T.mut, purple: T.purple, text: T.text };
+const tone = (t) => TONE_COLOR[t] || T.text;
+
+// Converte cada fonte num "evento" comum (R quando possível, e R$).
+function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
+  const ev = [];
+  (manual || []).forEach(m => {
+    const r = typeof m.r === "number" ? m.r : null;
+    const fin = typeof m.fin === "number" ? m.fin : (r != null && valorR ? +(r * valorR).toFixed(2) : null);
+    const t = toTime(m.data);
+    ev.push({ id: "m" + m.id, srcId: m.id, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: m.ativo || null, direcao: m.direcao || null, r, fin, setup: m.setup || "", notas: m.notas || "", fonte: "manual" });
+  });
+  (diario || []).forEach((d, i) => {
+    const fin = typeof d.resultado === "number" ? d.resultado : null;
+    const r = fin != null && valorR ? +(fin / valorR).toFixed(3) : null;
+    const t = toTime(d.data);
+    ev.push({ id: "c" + i, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: null, direcao: null, r, fin, setup: "", notas: d.reflexao || d.dificuldade || "", fonte: "conselheiro" });
+  });
+  if (includeCarteira) {
+    (posicoes || []).filter(p => p.resultado != null && p.status !== "ABERTA").forEach(p => {
+      const riscoPct = Math.abs(tradeRisco(p));
+      const r = riscoPct ? +(p.resultado / riscoPct).toFixed(3) : null;
+      const fin = r != null && valorR ? +(r * valorR).toFixed(2) : null;
+      const t = toTime(p.dataSaida || p.dataEntrada);
+      ev.push({ id: "p" + p.posId, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: p.ticker || null, direcao: tradeDir(p), r, fin, setup: "", notas: "", fonte: "carteira" });
+    });
+  }
+  return ev.sort((a, b) => a.t - b.t);
+}
+
+// Tabela de interpretação do SQN (System Quality Number) — como na planilha.
+const SQN_BANDS = [
+  { min: -Infinity, label: "Sistema fraco", tone: "red", hint: "Pode não compensar o risco/esforço." },
+  { min: 1.6, label: "Sistema bom", tone: "gold", hint: "Qualidade já aceitável." },
+  { min: 2.0, label: "Muito bom", tone: "green", hint: "Resultados consistentes e lucrativos." },
+  { min: 3.0, label: "Excelente", tone: "green", hint: "Alta qualidade e confiabilidade." },
+  { min: 7.0, label: "Excepcional", tone: "purple", hint: "Extremamente raro." },
+];
+const sqnBand = (v) => SQN_BANDS.reduce((acc, b) => v >= b.min ? b : acc, SQN_BANDS[0]);
+
+function computeStats(events) {
+  const withR = events.filter(e => typeof e.r === "number" && !isNaN(e.r));
+  const rs = withR.map(e => e.r);
+  const n = rs.length;
+  const sum = (a) => a.reduce((s, x) => s + x, 0);
+  const gains = rs.filter(r => r > 0), losses = rs.filter(r => r < 0);
+  const somaR = sum(rs);
+  const decididos = gains.length + losses.length;
+  const winRate = decididos ? gains.length / decididos : 0;
+  const mediaGain = gains.length ? sum(gains) / gains.length : 0;
+  const mediaLoss = losses.length ? sum(losses) / losses.length : 0;
+  const payoff = mediaLoss !== 0 ? mediaGain / Math.abs(mediaLoss) : 0;
+  const mean = n ? somaR / n : 0;
+  const variance = n ? sum(rs.map(r => (r - mean) ** 2)) / n : 0;
+  const std = Math.sqrt(variance);
+  const sqn = std > 0 && n > 0 ? (mean / std) * Math.sqrt(n) : 0;
+  let cum = 0, peak = 0, trough = 0, maxDD = 0, runUp = 0;
+  const curveR = [0];
+  withR.forEach(e => { cum += e.r; curveR.push(+cum.toFixed(3)); if (cum > peak) peak = cum; if (cum - peak < maxDD) maxDD = cum - peak; if (cum < trough) trough = cum; if (cum - trough > runUp) runUp = cum - trough; });
+  const withFin = events.filter(e => typeof e.fin === "number" && !isNaN(e.fin));
+  let cf = 0; const curveFin = [0];
+  withFin.forEach(e => { cf += e.fin; curveFin.push(+cf.toFixed(2)); });
+  let cw = 0, cl = 0, maxW = 0, maxL = 0, lastSign = 0;
+  withR.forEach(e => { if (e.r > 0) { cw++; cl = 0; lastSign = 1; } else if (e.r < 0) { cl++; cw = 0; lastSign = -1; } maxW = Math.max(maxW, cw); maxL = Math.max(maxL, cl); });
+  const curStreak = lastSign > 0 ? cw : lastSign < 0 ? cl : 0;
+  const byMonth = {}; withR.forEach(e => { byMonth[e.ym] = (byMonth[e.ym] || 0) + e.r; });
+  const grp = (key) => { const o = {}; withR.forEach(e => { const k = key(e) || "—"; (o[k] = o[k] || { n: 0, somaR: 0, w: 0 }); o[k].n++; o[k].somaR += e.r; if (e.r > 0) o[k].w++; }); return o; };
+  return {
+    n, gains: gains.length, losses: losses.length, winRate, somaR, somaFin: cf, hasFin: withFin.length > 0,
+    mediaGain, mediaLoss, payoff, expectativa: mean, std, sqn, sqnBand: sqnBand(sqn),
+    maxDD, runUp, maiorGain: n ? Math.max(...rs) : 0, maiorLoss: n ? Math.min(...rs) : 0,
+    maxW, maxL, curStreak, lastSign, curveR, curveFin,
+    byMonth, byAtivo: grp(e => e.ativo), byDir: grp(e => e.direcao), byDow: grp(e => DOW[e.dia]),
+  };
+}
+
+// Curva de série acumulada (genérica) — reaproveita o visual da carteira.
+function Curve({ points, title, sub, total, unit = "R", color }) {
+  if (!points || points.length < 2) {
+    return (
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>{title}</div>
+        <div style={{ padding: 28, textAlign: "center", fontSize: 14, color: T.dim }}>Registre operações para ver a curva.</div>
+      </Card>
+    );
+  }
+  const W = 1000, H = 230, padL = 14, padR = 14, padT = 16, padB = 18;
+  const col = color || ((total ?? points[points.length - 1]) >= 0 ? T.green : T.red);
+  let minV = Math.min(0, ...points), maxV = Math.max(0, ...points);
+  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const mg = (maxV - minV) * 0.08; minV -= mg; maxV += mg;
+  const np = points.length;
+  const x = (i) => padL + (i / (np - 1)) * (W - padL - padR);
+  const y = (v) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
+  const line = points.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p).toFixed(1)).join(" ");
+  const area = "M" + x(0).toFixed(1) + " " + y(0).toFixed(1) + " " + points.map((p, i) => "L" + x(i).toFixed(1) + " " + y(p).toFixed(1)).join(" ") + " L" + x(np - 1).toFixed(1) + " " + y(0).toFixed(1) + " Z";
+  const gid = "fh-cv-" + unit;
+  return (
+    <Card style={{ overflow: "hidden" }}>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{title}</div>
+        {sub && <div style={{ fontSize: 13, color: T.dim }}>{sub}</div>}
+      </div>
+      <div style={{ padding: 12 }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+          <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={col} stopOpacity="0.22" /><stop offset="100%" stopColor={col} stopOpacity="0" /></linearGradient></defs>
+          <line x1={padL} y1={y(0)} x2={W - padR} y2={y(0)} stroke={T.line} strokeWidth="1" strokeDasharray="4 4" />
+          <path d={area} fill={`url(#${gid})`} />
+          <path d={line} fill="none" stroke={col} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+          <circle cx={x(np - 1)} cy={y(points[np - 1])} r="4" fill={col} />
+        </svg>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Diário de Trades (registro) ──────────────────────────────────────────────
+function TradesScreen({ session }) {
+  const userId = session?.user;
+  const [trades, setTrades] = useState([]);
+  const [valorR, setValorR] = useState(null);
+  const [diario, setDiario] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const idRef = useRef(1);
+  const today = new Date().toISOString().slice(0, 10);
+  const baseForm = { data: today, ativo: "WIN", direcao: "COMPRA", unidade: "R", valor: "", setup: "", notas: "" };
+  const [form, setForm] = useState(baseForm);
+  const [vrInput, setVrInput] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const j = await api.get("/api/trades");
+        const t = (j.trades || []).map(x => ({ ...x, id: typeof x.id === "number" ? x.id : idRef.current++ }));
+        t.forEach(x => { if (typeof x.id === "number" && x.id >= idRef.current) idRef.current = x.id + 1; });
+        setTrades(t); setValorR(j.valorR || null); setVrInput(j.valorR ? String(j.valorR) : "");
+      } catch (e) { setErr(e.message); }
+      try { const c = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon")); if (Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const persist = async (nextTrades, nextValorR) => {
+    const vr = nextValorR !== undefined ? nextValorR : valorR;
+    setTrades(nextTrades); if (nextValorR !== undefined) setValorR(nextValorR);
+    try { await api.post("/api/trades", { trades: nextTrades, valorR: vr }); }
+    catch (e) { setErr("Falha ao salvar: " + e.message); }
+  };
+  const saveValorR = () => { const v = parseFloat(String(vrInput).replace(",", ".")); persist(trades, v > 0 ? v : null); };
+  const addTrade = () => {
+    const valor = parseFloat(String(form.valor).replace(",", "."));
+    if (isNaN(valor)) { setErr("Informe o resultado da operação."); return; }
+    setErr("");
+    let r, fin;
+    if (form.unidade === "R") { r = valor; fin = valorR ? +(valor * valorR).toFixed(2) : null; }
+    else { fin = valor; r = valorR ? +(valor / valorR).toFixed(3) : null; }
+    const nova = { id: idRef.current++, data: form.data, ativo: (form.ativo || "").trim().toUpperCase() || null, direcao: form.direcao, r, fin, setup: (form.setup || "").trim(), notas: (form.notas || "").trim() };
+    persist([...trades, nova]);
+    setForm({ ...baseForm, data: form.data, ativo: form.ativo, direcao: form.direcao, unidade: form.unidade });
+    setShowForm(false);
+  };
+  const removeTrade = (id) => persist(trades.filter(t => t.id !== id));
+
+  const events = buildEvents({ manual: trades, valorR, diario, posicoes: [], includeCarteira: false });
+  const lista = [...events].sort((a, b) => b.t - a.t);
+
+  const inp = (k) => ({ value: form[k], onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) });
+
+  if (loading) return <div style={{ padding: 40 }}><Loading label="Carregando seu diário..." /></div>;
+
+  return (
+    <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+      {err && <Banner tone="red">{err}</Banner>}
+
+      {/* Configuração: valor de 1R + novo trade */}
+      <Card style={{ padding: 18, display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Diário de Trades</div>
+          <div style={{ fontSize: 13, color: T.dim, marginTop: 4 }}>Registre cada operação em R-múltiplo (risco) ou em R$. O <b>Dashboard</b> calcula as estatísticas a partir daqui.</div>
+        </div>
+        <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <Field label="Valor de 1R (R$)">
+            <div style={{ display: "flex", gap: 6 }}>
+              <Input mono type="number" step="0.01" value={vrInput} onChange={e => setVrInput(e.target.value)} placeholder="ex.: 250" style={{ width: 120 }} />
+              <Button variant="ghost" size="sm" onClick={saveValorR}>Salvar</Button>
+            </div>
+          </Field>
+          <Button variant="gold" onClick={() => { setErr(""); setShowForm(s => !s); }}>{showForm ? "× Fechar" : "+ Novo trade"}</Button>
+        </div>
+      </Card>
+
+      {!valorR && <Banner tone="gold">Defina o <b>valor de 1R em R$</b> para converter automaticamente entre R-múltiplo e financeiro (e habilitar todas as estatísticas).</Banner>}
+
+      {/* Formulário */}
+      {showForm && (
+        <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            <Field label="Data"><Input type="date" {...inp("data")} /></Field>
+            <Field label="Ativo">
+              <Input list="fh-ativos" {...inp("ativo")} placeholder="WIN" />
+              <datalist id="fh-ativos">{ATIVOS_SUG.map(a => <option key={a} value={a} />)}</datalist>
+            </Field>
+            <Field label="Direção">
+              <div style={{ display: "flex", gap: 6 }}>
+                {["COMPRA", "VENDA"].map(d => (
+                  <button key={d} className="fh-btn" onClick={() => setForm(f => ({ ...f, direcao: d }))}
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 8, fontSize: 13, fontWeight: 700, border: "1px solid " + (form.direcao === d ? (d === "VENDA" ? T.red : T.green) : T.line), background: form.direcao === d ? (d === "VENDA" ? T.red : T.green) + "1a" : "transparent", color: form.direcao === d ? (d === "VENDA" ? T.red : T.green) : T.mut }}>
+                    {d === "VENDA" ? "▼ Venda" : "▲ Compra"}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Resultado">
+              <div style={{ display: "flex", gap: 6 }}>
+                <Input mono type="number" step="0.01" {...inp("valor")} placeholder={form.unidade === "R" ? "ex.: 1.5 ou -1" : "ex.: 375 ou -250"} style={{ flex: 1 }} />
+                <button className="fh-btn" onClick={() => setForm(f => ({ ...f, unidade: f.unidade === "R" ? "R$" : "R" }))}
+                  style={{ width: 48, borderRadius: 8, fontSize: 13, fontWeight: 700, border: "1px solid " + T.lineGold, background: T.goldSoft, color: T.gold }}>{form.unidade}</button>
+              </div>
+            </Field>
+            <Field label="Setup / estratégia"><Input {...inp("setup")} placeholder="ex.: rompimento, pullback" /></Field>
+            <Field label="Notas"><Input {...inp("notas")} placeholder="opcional" /></Field>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>Cancelar</Button>
+            <Button size="sm" onClick={addTrade}>Registrar operação</Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Lista */}
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Operações ({lista.length})</div>
+          <div style={{ fontSize: 12, color: T.dim }}>manual + registradas pelo Conselheiro</div>
+        </div>
+        {lista.length === 0
+          ? <div style={{ padding: 28, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhuma operação ainda. Clique em <b>+ Novo trade</b> para começar.</div>
+          : (
+            <div className="fh-scroll-x">
+              <div style={{ minWidth: 720 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 44px", gap: 8, padding: "8px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
+                  <div>DATA</div><div>ORIGEM</div><div>ATIVO / SETUP</div><div style={{ textAlign: "right" }}>R</div><div style={{ textAlign: "right" }}>R$</div><div></div>
+                </div>
+                {lista.map(e => (
+                  <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 44px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
+                    <div style={{ fontSize: 12, color: T.mut }}>{e.t ? dmy(e.t) : "—"}</div>
+                    <div><Badge tone={FONTE_TONE[e.fonte]}>{FONTE_LABEL[e.fonte]}</Badge></div>
+                    <div style={{ fontFamily: T.sans }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>{e.ativo || "—"}</span>
+                      {e.direcao && <span style={{ fontSize: 10, marginLeft: 6, color: e.direcao === "VENDA" ? T.red : T.green, fontWeight: 700 }}>{e.direcao === "VENDA" ? "▼" : "▲"}</span>}
+                      {(e.setup || e.notas) && <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>{e.setup || e.notas}</div>}
+                    </div>
+                    <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: e.r == null ? T.dim : signTone(e.r) }}>{e.r == null ? "—" : fmtR(e.r)}</div>
+                    <div style={{ textAlign: "right", fontSize: 13, color: e.fin == null ? T.dim : signTone(e.fin) }}>{e.fin == null ? "—" : fmtBRL(e.fin)}</div>
+                    <div style={{ textAlign: "right" }}>
+                      {e.fonte === "manual"
+                        ? <button className="fh-btn" onClick={() => removeTrade(e.srcId)} title="Excluir" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 30, fontSize: 15 }}>×</button>
+                        : <span title="Registrado automaticamente" style={{ fontSize: 14, color: T.dim }}>🔒</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+      </Card>
+    </div>
+  );
+}
+
+// ─── Dashboard de Performance ─────────────────────────────────────────────────
+function DashboardScreen({ session }) {
+  const userId = session?.user;
+  const [trades, setTrades] = useState([]);
+  const [valorR, setValorR] = useState(null);
+  const [diario, setDiario] = useState([]);
+  const [posicoes, setPosicoes] = useState([]);
+  const [includeCarteira, setIncludeCarteira] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [ai, setAi] = useState(""); const [aiLoading, setAiLoading] = useState(false); const [aiErr, setAiErr] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try { const j = await api.get("/api/trades"); setTrades(j.trades || []); setValorR(j.valorR || null); } catch (e) {}
+      try { const c = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon")); if (Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
+      try { const p = await api.get("/api/posicoes"); if (Array.isArray(p.posicoes)) setPosicoes(p.posicoes); } catch (e) {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const events = buildEvents({ manual: trades, valorR, diario, posicoes, includeCarteira });
+  const s = computeStats(events);
+
+  const analisar = async () => {
+    if (!s.n) return;
+    setAiLoading(true); setAiErr(""); setAi("");
+    try {
+      const top = (o) => Object.entries(o).sort((a, b) => b[1].somaR - a[1].somaR).map(([k, v]) => `${k}: ${v.somaR.toFixed(1)}R (${v.n} ops, ${((v.w / v.n) * 100).toFixed(0)}% acerto)`).join("; ");
+      const resumo = [
+        `Operações: ${s.n} (${s.gains} gain / ${s.losses} loss)`,
+        `Taxa de acerto: ${(s.winRate * 100).toFixed(1)}%`,
+        `R acumulado: ${s.somaR.toFixed(2)}R`,
+        `Expectativa por trade: ${s.expectativa.toFixed(3)}R`,
+        `Payoff (média gain / média loss): ${s.payoff.toFixed(2)} (média gain ${s.mediaGain.toFixed(2)}R, média loss ${s.mediaLoss.toFixed(2)}R)`,
+        `SQN: ${s.sqn.toFixed(2)} (${s.sqnBand.label})`,
+        `Max drawdown: ${s.maxDD.toFixed(2)}R | Run-up: ${s.runUp.toFixed(2)}R`,
+        `Maior sequência de loss: ${s.maxL} | de gain: ${s.maxW}`,
+        `Por ativo: ${top(s.byAtivo) || "—"}`,
+        `Por direção: ${top(s.byDir) || "—"}`,
+      ].join("\n");
+      const data = await callAI({
+        system: "Você é O Conselheiro, coach de trading na B3, direto, técnico e empático — de trader para trader. Analise as estatísticas de performance e responda em português com: (1) um diagnóstico curto, (2) pontos fortes, (3) pontos de atenção e (4) 2 a 3 recomendações práticas. Use os conceitos de R-múltiplo, payoff, expectativa matemática e SQN. Não use tabelas; use parágrafos curtos e bullets com '-'.",
+        messages: [{ role: "user", content: "Minhas estatísticas de trading:\n" + resumo }],
+        max_tokens: 1100,
+      });
+      const txt = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+      setAi(txt || "A IA não retornou análise. Tente novamente.");
+    } catch (e) { setAiErr(e.message); }
+    setAiLoading(false);
+  };
+
+  if (loading) return <div style={{ padding: 40 }}><Loading label="Calculando suas estatísticas..." /></div>;
+
+  if (!s.n) {
+    return (
+      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px" }}>
+        <EmptyState icon="📊" title="Sem dados ainda"
+          desc="Registre operações em Meus Trades (ou deixe O Conselheiro registrar) para ver seu dashboard de performance." />
+      </div>
+    );
+  }
+
+  const months = Object.keys(s.byMonth).sort();
+  const maxAbsMonth = Math.max(1, ...months.map(m => Math.abs(s.byMonth[m])));
+  const mLabel = (ym) => { const [y, mm] = ym.split("-"); return ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][+mm - 1] + "/" + y.slice(2); };
+
+  const Breakdown = ({ title, obj }) => {
+    const rows = Object.entries(obj).sort((a, b) => b[1].somaR - a[1].somaR);
+    if (!rows.length) return null;
+    return (
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 14, fontWeight: 700, color: T.text }}>{title}</div>
+        <div>
+          {rows.map(([k, v]) => (
+            <div key={k} style={{ display: "grid", gridTemplateColumns: "1fr 70px 70px 60px", gap: 8, padding: "9px 16px", borderBottom: "1px solid " + T.line, fontFamily: T.mono, fontSize: 13, alignItems: "center" }}>
+              <div style={{ color: T.text, fontFamily: T.sans }}>{k}</div>
+              <div style={{ textAlign: "right", color: T.dim }}>{v.n} ops</div>
+              <div style={{ textAlign: "right", color: T.mut }}>{((v.w / v.n) * 100).toFixed(0)}%</div>
+              <div style={{ textAlign: "right", fontWeight: 700, color: signTone(v.somaR) }}>{fmtR(v.somaR, 1)}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    );
+  };
+
+  return (
+    <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Toggle de fontes */}
+      <Card style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{includeCarteira ? " + carteira" : ""}</div>
+        <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
+          <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
+            <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
+          </span>
+          Incluir operações da Carteira
+        </button>
+      </Card>
+
+      {/* KPIs principais */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <Stat label="Operações" value={s.n} />
+        <Stat label="Taxa de acerto" value={(s.winRate * 100).toFixed(1) + "%"} tone={s.winRate >= 0.5 ? "green" : "gold"} />
+        <Stat label="R acumulado" value={fmtR(s.somaR)} tone={s.somaR >= 0 ? "green" : "red"} />
+        {s.hasFin && <Stat label="Resultado R$" value={fmtBRL(s.somaFin)} tone={s.somaFin >= 0 ? "green" : "red"} />}
+        <Stat label="Payoff" value={s.payoff.toFixed(2)} tone={s.payoff >= 1 ? "green" : "red"} />
+        <Stat label="Expectativa / trade" value={fmtR(s.expectativa, 3)} tone={s.expectativa >= 0 ? "green" : "red"} />
+      </div>
+
+      {/* SQN destacado */}
+      <Card style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", borderColor: T.lineGold }}>
+        <div style={{ minWidth: 120 }}>
+          <div style={{ fontSize: 11, color: T.mut, letterSpacing: 0.5, textTransform: "uppercase" }}>SQN</div>
+          <div style={{ fontSize: 38, fontWeight: 800, color: tone(s.sqnBand.tone), fontFamily: T.mono, lineHeight: 1.1 }}>{s.sqn.toFixed(2)}</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <Badge tone={s.sqnBand.tone} style={{ fontSize: 12 }}>{s.sqnBand.label}</Badge>
+          <div style={{ fontSize: 13, color: T.mut, marginTop: 8 }}>{s.sqnBand.hint}</div>
+          <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>System Quality Number — qualidade e consistência do sistema (expectativa ÷ desvio-padrão × √nº de trades).</div>
+        </div>
+      </Card>
+
+      {/* Secundários */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
+        <Stat label="Média gain" value={fmtR(s.mediaGain)} tone="green" />
+        <Stat label="Média loss" value={fmtR(s.mediaLoss)} tone="red" />
+        <Stat label="Max drawdown" value={fmtR(s.maxDD)} tone="red" />
+        <Stat label="Run-up" value={fmtR(s.runUp)} tone="green" />
+        <Stat label="Maior gain / loss" value={fmtR(s.maiorGain, 1) + " / " + fmtR(s.maiorLoss, 1)} />
+        <Stat label="Sequências (G/L)" value={s.maxW + " / " + s.maxL} tone="mut" />
+      </div>
+
+      {/* Curvas */}
+      <Curve points={s.curveR} title="Curva de capital (R)" total={s.somaR}
+        sub={<span>acumulado <b style={{ color: signTone(s.somaR), fontFamily: T.mono }}>{fmtR(s.somaR)}</b></span>} unit="R" />
+      {s.hasFin && (
+        <Curve points={s.curveFin} title="Curva de capital (R$)" total={s.somaFin}
+          sub={<span>acumulado <b style={{ color: signTone(s.somaFin), fontFamily: T.mono }}>{fmtBRL(s.somaFin)}</b></span>} unit="BRL" />
+      )}
+
+      {/* Resultado por mês */}
+      {months.length > 0 && (
+        <Card style={{ overflow: "hidden" }}>
+          <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>Resultado por mês (R)</div>
+          <div style={{ padding: "12px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {months.map(m => {
+              const v = s.byMonth[m]; const w = (Math.abs(v) / maxAbsMonth) * 100;
+              return (
+                <div key={m} style={{ display: "grid", gridTemplateColumns: "70px 1fr 70px", gap: 10, alignItems: "center" }}>
+                  <div style={{ fontSize: 12, color: T.mut, fontFamily: T.mono }}>{mLabel(m)}</div>
+                  <div style={{ height: 16, background: T.inset, borderRadius: 5, overflow: "hidden", position: "relative" }}>
+                    <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: w + "%", background: signTone(v), opacity: 0.8, borderRadius: 5 }} />
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: signTone(v), fontFamily: T.mono, textAlign: "right" }}>{fmtR(v, 1)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Quebras */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+        <Breakdown title="Por ativo" obj={s.byAtivo} />
+        <Breakdown title="Por direção" obj={s.byDir} />
+        <Breakdown title="Por dia da semana" obj={s.byDow} />
+      </div>
+
+      {/* Análise com IA */}
+      <Card style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text, display: "flex", alignItems: "center", gap: 8 }}><Icon name="conselheiro" size={16} /> O Conselheiro analisa sua performance</div>
+          <Button variant="gold" size="sm" onClick={analisar} disabled={aiLoading}>{aiLoading ? "⟳ Analisando..." : ai ? "↻ Analisar de novo" : "Analisar com IA"}</Button>
+        </div>
+        <div style={{ padding: "16px 18px" }}>
+          {aiErr && <Banner tone="red">{aiErr}</Banner>}
+          {!ai && !aiLoading && !aiErr && <div style={{ fontSize: 14, color: T.dim }}>Clique em <b>Analisar com IA</b> para receber um diagnóstico do seu sistema com base nas estatísticas acima.</div>}
+          {aiLoading && <div style={{ display: "flex", justifyContent: "center", padding: 16 }}><Dots /></div>}
+          {ai && <div style={{ fontSize: 14, color: T.text, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{ai}</div>}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [active, setActive] = useState("panorama");
@@ -1449,6 +1931,8 @@ export default function App() {
         {current === "panorama" && <PanoramaScreen />}
         {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} />}
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
+        {current === "trades" && <TradesScreen session={session} />}
+        {current === "dashboard" && <DashboardScreen session={session} />}
         {current === "clientes" && <ClientesScreen session={session} />}
       </Shell>
     </>

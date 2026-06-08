@@ -15,8 +15,8 @@ export const ROLES = ["client", "moderator", "superadmin"];
 
 // Permissões granulares por página (controlam clientes). Staff (moderador/super
 // admin) tem todas implicitamente.
-export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro"];
-export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro"];
+export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades"];
+export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades"];
 
 // Cadastro inicial — usado apenas se o banco ainda não tiver usuários.
 // Estas senhas são só a semente; troque-as pelo painel admin após o 1º login.
@@ -84,6 +84,12 @@ function normalizeUsers(map) {
     if (u.role === "admin") { u.role = u.user === SUPERADMIN ? "superadmin" : "moderator"; changed = true; }
     if (!ROLES.includes(u.role)) { u.role = "client"; changed = true; }
     if (u.role === "client" && !Array.isArray(u.perms)) { u.perms = [...DEFAULT_CLIENT_PERMS]; changed = true; }
+    // Migração única do cap "trades" (Diário + Dashboard): concede a clientes
+    // antigos uma vez só. O flag evita reconceder caso o admin opte por remover.
+    if (u.role === "client" && Array.isArray(u.perms) && !u.tradesMigrated) {
+      if (!u.perms.includes("trades")) u.perms.push("trades");
+      u.tradesMigrated = true; changed = true;
+    }
   }
   return changed;
 }
