@@ -1246,6 +1246,19 @@ function ClientesScreen({ session }) {
   const [modal, setModal] = useState(null); // { mode, user, name, pass, role, expiry, perms, targetSuper }
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [demoMsg, setDemoMsg] = useState(null); // { ok, text }
+  const [seeding, setSeeding] = useState(false);
+
+  const seedDemo = async () => {
+    if (seeding) return;
+    setSeeding(true); setDemoMsg(null);
+    try {
+      const j = await api.post("/api/seed-demo", {});
+      setDemoMsg({ ok: true, text: `Conta demo pronta — login "${j.user}" / senha "${j.pass}". Populada com ${j.trades} trades, ${j.diario} lançamentos do Conselheiro e ${j.positions} posições (1R = R$ ${j.valorR}). Saia e entre como ${j.user} para validar.` });
+      await load();
+    } catch (e) { setDemoMsg({ ok: false, text: e.message }); }
+    finally { setSeeding(false); }
+  };
 
   const load = async () => {
     setLoading(true); setError("");
@@ -1314,9 +1327,13 @@ function ClientesScreen({ session }) {
           {list.length} {list.length === 1 ? "usuário" : "usuários"}
           {!isSuper && <span style={{ marginLeft: 6 }}>· você gerencia apenas clientes</span>}
         </div>
-        <Button size="sm" onClick={openCreate}>+ Novo {isSuper ? "usuário" : "cliente"}</Button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {isSuper && <Button variant="ghost" size="sm" onClick={seedDemo} disabled={seeding} title="Cria/atualiza a conta de teste com dados fictícios">{seeding ? "⟳ Gerando..." : "🧪 Conta demo"}</Button>}
+          <Button size="sm" onClick={openCreate}>+ Novo {isSuper ? "usuário" : "cliente"}</Button>
+        </div>
       </div>
 
+      {demoMsg && <Banner tone={demoMsg.ok ? "green" : "red"}>{demoMsg.text}</Banner>}
       {error && <Banner tone="red">{error}</Banner>}
 
       {loading ? <Loading label="Carregando usuários..." />
