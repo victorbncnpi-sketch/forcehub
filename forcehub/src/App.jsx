@@ -1,23 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
 
-// ─── USUÁRIOS — adicione clientes aqui ───────────────────────────────────────
-// role: "admin" = acesso total | "client" = só visualiza carteira publicada
-// expiry: "YYYY-MM-DD" — acesso expira nessa data
-const USERS = [
-  { user: "victor",    pass: "forcehub2026", role: "admin",  expiry: null,         name: "Victor Noronha" },
-  { user: "cliente1",  pass: "xp2026c1",     role: "client", expiry: "2027-06-01", name: "Cliente 1" },
-  { user: "cliente2",  pass: "xp2026c2",     role: "client", expiry: "2027-06-01", name: "Cliente 2" },
-  { user: "andre.gain",    pass: "xp2026ag",     role: "client", expiry: "2027-06-01", name: "Andre Gain" },
-  { user: "maria.emilia",  pass: "xp2026me",     role: "client", expiry: "2027-06-01", name: "Maria Emilia" },
-];
-
-function checkExpiry(user) {
-  if (!user.expiry) return true;
-  return new Date(user.expiry) >= new Date();
-}
-
 // ─── Camada de dados (backend via /api/*) ─────────────────────────────────────
+// Autenticação e cadastro de usuários agora ficam no backend (api/auth.js,
+// api/users.js). As senhas nunca chegam ao frontend; a sessão é um cookie
+// httpOnly e os clientes são gerenciados pelo admin no painel "Clientes".
 const api = {
   get: async (path) => {
     const r = await fetch(path);
@@ -104,14 +91,16 @@ const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString("pt-BR", { hour: "2
 function LoginScreen({ onLogin }) {
   const [user, setUser] = useState(""); const [pass, setPass] = useState("");
   const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
-  const handle = () => {
+  const handle = async () => {
+    if (loading) return;
     setLoading(true); setError("");
-    setTimeout(() => {
-      const found = USERS.find(u => u.user === user.trim().toLowerCase() && u.pass === pass);
-      if (!found) { setError("Usuário ou senha incorretos."); setLoading(false); return; }
-      if (!checkExpiry(found)) { setError("Acesso expirado. Entre em contato com Victor Noronha."); setLoading(false); return; }
-      onLogin({ user: found.user, role: found.role, name: found.name, expiry: found.expiry });
-    }, 500);
+    try {
+      const j = await api.post("/api/auth", { action: "login", user: user.trim().toLowerCase(), pass });
+      onLogin(j.user);
+    } catch (e) {
+      setError(e.message || "Não foi possível entrar. Tente novamente.");
+      setLoading(false);
+    }
   };
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -144,19 +133,21 @@ const NAV = [
   { key: "panorama",    icon: "panorama",    label: "Panorama",    title: "Panorama de Mercado" },
   { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada" },
   { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro" },
+  { key: "clientes",    icon: "users",       label: "Clientes",    title: "Gestão de Clientes", admin: true },
 ];
 
 function Shell({ session, active, onNavigate, onLogout, children }) {
   const [time, setTime] = useState(new Date());
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
   const isAdmin = session?.role === "admin";
+  const nav = NAV.filter(n => !n.admin || isAdmin);
   const cur = NAV.find(n => n.key === active);
   return (
     <div className="fh-shell">
       <aside className="fh-side">
         <div style={{ padding: "18px 16px", borderBottom: "1px solid " + T.line }}><Logo size={17} /></div>
         <nav style={{ padding: 12, display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-          {NAV.map(n => (
+          {nav.map(n => (
             <div key={n.key} className={"fh-navitem" + (active === n.key ? " active" : "")} onClick={() => onNavigate(n.key)}
               role="button" tabIndex={0} aria-current={active === n.key} title={n.label}
               onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate(n.key); } }}>
@@ -972,11 +963,150 @@ function ConselheiroScreen({ userId }) {
   );
 }
 
+// ─── Gestão de Clientes (admin) ───────────────────────────────────────────────
+function ClientesScreen({ currentUser }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [modal, setModal] = useState(null); // { mode, user, name, pass, role, expiry }
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const load = async () => {
+    setLoading(true); setError("");
+    try { const j = await api.get("/api/users"); setList(j.users || []); }
+    catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const openCreate = () => { setFormError(""); setModal({ mode: "create", user: "", name: "", pass: "", role: "client", expiry: "" }); };
+  const openEdit = (u) => { setFormError(""); setModal({ mode: "edit", user: u.user, name: u.name || "", pass: "", role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "" }); };
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true); setFormError("");
+    try {
+      const m = modal;
+      const payload = m.mode === "create"
+        ? { action: "create", user: m.user.trim().toLowerCase(), name: m.name.trim(), pass: m.pass, role: m.role, expiry: m.expiry || null }
+        : { action: "update", user: m.user, name: m.name.trim(), role: m.role, expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
+      await api.post("/api/users", payload);
+      setModal(null);
+      await load();
+    } catch (e) { setFormError(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const remove = async (u) => {
+    if (!window.confirm(`Remover o acesso de "${u.name || u.user}" (${u.user})? Esta ação não pode ser desfeita.`)) return;
+    try { await api.post("/api/users", { action: "delete", user: u.user }); await load(); }
+    catch (e) { setError(e.message); }
+  };
+
+  const expired = (e) => { if (!e) return false; const t = new Date(); t.setHours(0, 0, 0, 0); return new Date(e) < t; };
+  const fmtExp = (e) => !e ? "sem prazo" : new Date(e).toLocaleDateString("pt-BR");
+  const COLS = "1fr 1.2fr 96px 130px 92px";
+
+  return (
+    <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 14, color: T.dim }}>{list.length} {list.length === 1 ? "usuário cadastrado" : "usuários cadastrados"}</div>
+        <Button size="sm" onClick={openCreate}>+ Novo cliente</Button>
+      </div>
+
+      {error && <Banner tone="red">{error}</Banner>}
+
+      {loading ? <Loading label="Carregando clientes..." />
+        : list.length === 0 ? <EmptyState icon={<Icon name="users" size={40} />} title="Nenhum cliente cadastrado" desc="Cadastre o primeiro acesso clicando em “Novo cliente”." />
+        : (
+          <Card style={{ overflow: "hidden" }}>
+            <div className="fh-scroll-x">
+              <div style={{ minWidth: 560 }}>
+                <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
+                  {["USUÁRIO", "NOME", "PAPEL", "ACESSO ATÉ", ""].map((h, i) => <div key={i} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: i === 4 ? "right" : "left" }}>{h}</div>)}
+                </div>
+                {list.map(u => (
+                  <div key={u.user} style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, alignItems: "center" }}>
+                    <div style={{ fontSize: 14, color: T.text, fontFamily: T.mono, display: "flex", alignItems: "center", gap: 6, overflow: "hidden", textOverflow: "ellipsis" }}>{u.user}{u.user === currentUser && <span style={{ fontSize: 10, color: T.dim }}>(você)</span>}</div>
+                    <div style={{ fontSize: 14, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name || "—"}</div>
+                    <div>{u.role === "admin" ? <Badge tone="gold">ADMIN</Badge> : <Badge tone="blue">CLIENTE</Badge>}</div>
+                    <div style={{ fontSize: 13, color: expired(u.expiry) ? T.red : T.mut, fontFamily: T.mono }}>{fmtExp(u.expiry)}{expired(u.expiry) ? " ⚠" : ""}</div>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <Button variant="ghost" size="sm" onClick={() => openEdit(u)} style={{ padding: "5px 10px" }}>Editar</Button>
+                      {u.user !== currentUser && <Button variant="danger" size="sm" onClick={() => remove(u)} style={{ padding: "5px 9px" }} title="Remover">×</Button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        )}
+
+      {modal && (
+        <Modal title={modal.mode === "create" ? "Novo cliente" : "Editar acesso — " + modal.user} onClose={() => setModal(null)} width={460}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label="Usuário (login)" hint={modal.mode === "edit" ? "O login não pode ser alterado." : "Letras minúsculas, números, ponto, hífen ou underscore."}>
+              <Input value={modal.user} disabled={modal.mode === "edit"} onChange={e => setModal(m => ({ ...m, user: e.target.value }))} placeholder="ex: joao.silva" mono />
+            </Field>
+            <Field label="Nome">
+              <Input value={modal.name} onChange={e => setModal(m => ({ ...m, name: e.target.value }))} placeholder="Nome do cliente" />
+            </Field>
+            <Field label={modal.mode === "create" ? "Senha" : "Nova senha"} hint={modal.mode === "edit" ? "Deixe em branco para manter a senha atual." : "Mínimo de 6 caracteres."}>
+              <Input type="password" value={modal.pass} onChange={e => setModal(m => ({ ...m, pass: e.target.value }))} placeholder="••••••••" />
+            </Field>
+            <div style={{ display: "flex", gap: 12 }}>
+              <Field label="Papel" style={{ flex: 1 }}>
+                <select className="fh-input" value={modal.role} onChange={e => setModal(m => ({ ...m, role: e.target.value }))} style={{ width: "100%" }}>
+                  <option value="client">Cliente</option>
+                  <option value="admin">Administrador</option>
+                </select>
+              </Field>
+              <Field label="Acesso até (opcional)" style={{ flex: 1 }}>
+                <Input type="date" value={modal.expiry} onChange={e => setModal(m => ({ ...m, expiry: e.target.value }))} />
+              </Field>
+            </div>
+            {formError && <div style={{ fontSize: 13, color: T.red }}>⚠ {formError}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
+              <Button variant="ghost" onClick={() => setModal(null)}>Cancelar</Button>
+              <Button onClick={save} disabled={saving}>{saving ? "Salvando..." : (modal.mode === "create" ? "Cadastrar →" : "Salvar")}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── App ────────────────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(null);
   const [active, setActive] = useState("panorama");
+  const [booting, setBooting] = useState(true);
   const isAdmin = session?.role === "admin";
+
+  // Restaura a sessão a partir do cookie (mantém o login após recarregar).
+  useEffect(() => {
+    (async () => {
+      try { const j = await api.get("/api/auth"); if (j.user) setSession(j.user); }
+      catch (e) { /* sem sessão */ }
+      finally { setBooting(false); }
+    })();
+  }, []);
+
+  const logout = async () => {
+    try { await api.post("/api/auth", { action: "logout" }); } catch (e) {}
+    setSession(null); setActive("panorama");
+  };
+
+  if (booting) {
+    return (
+      <>
+        <GlobalStyle />
+        <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center" }}><Spinner /></div>
+      </>
+    );
+  }
 
   if (!session) {
     return (
@@ -990,10 +1120,11 @@ export default function App() {
   return (
     <>
       <GlobalStyle />
-      <Shell session={session} active={active} onNavigate={setActive} onLogout={() => setSession(null)}>
+      <Shell session={session} active={active} onNavigate={setActive} onLogout={logout}>
         {active === "panorama" && <PanoramaScreen />}
         {active === "carteira" && <CarteiraScreen isAdmin={isAdmin} />}
         {active === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
+        {active === "clientes" && isAdmin && <ClientesScreen currentUser={session?.user} />}
       </Shell>
     </>
   );

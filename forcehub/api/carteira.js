@@ -2,9 +2,9 @@
 // GET  -> { ok, recomendacoes, posicoes }
 // POST -> { recomendacoes, posicoes } salva o estado completo
 //
-// Observação de protótipo: a escrita não é autenticada no servidor (a auth é só
-// no cliente). Em produção, proteger este POST com autenticação real.
+// Acesso: GET exige sessão válida; POST (edição da carteira) exige admin.
 import { getRedis } from "./_redis";
+import { getSession } from "./_auth";
 
 const KEY = "forcehub:carteira";
 
@@ -13,6 +13,9 @@ export default async function handler(req, res) {
   if (!redis) {
     return res.status(503).json({ ok: false, error: "Banco não configurado (defina UPSTASH_REDIS_REST_URL/TOKEN)." });
   }
+
+  const sess = await getSession(req);
+  if (!sess) return res.status(401).json({ ok: false, error: "Não autenticado." });
 
   try {
     if (req.method === "GET") {
@@ -25,6 +28,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
+      if (sess.role !== "admin") return res.status(403).json({ ok: false, error: "Apenas administradores podem editar a carteira." });
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
       const recomendacoes = Array.isArray(body?.recomendacoes) ? body.recomendacoes : [];

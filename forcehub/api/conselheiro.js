@@ -2,6 +2,7 @@
 // GET  ?user=victor          -> { ok, perfil, diario }
 // POST ?user=victor { perfil?, diario? } -> merge e salva
 import { getRedis } from "./_redis";
+import { getSession } from "./_auth";
 
 const keyFor = (user) => "forcehub:conselheiro:" + user;
 
@@ -11,9 +12,16 @@ export default async function handler(req, res) {
     return res.status(503).json({ ok: false, error: "Banco não configurado (defina UPSTASH_REDIS_REST_URL/TOKEN)." });
   }
 
+  const sess = await getSession(req);
+  if (!sess) return res.status(401).json({ ok: false, error: "Não autenticado." });
+
   const user = (req.query.user || "").toString().trim().toLowerCase();
   if (!user) {
     return res.status(400).json({ ok: false, error: "Parâmetro 'user' é obrigatório." });
+  }
+  // Cliente só acessa o próprio diário; admin pode acessar qualquer um.
+  if (sess.role !== "admin" && user !== sess.user) {
+    return res.status(403).json({ ok: false, error: "Acesso negado." });
   }
 
   try {
