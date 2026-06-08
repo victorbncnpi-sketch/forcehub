@@ -1491,11 +1491,11 @@ function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
 
 // Tabela de interpretação do SQN (System Quality Number) — como na planilha.
 const SQN_BANDS = [
-  { min: -Infinity, label: "Sistema fraco", tone: "red", hint: "Pode não compensar o risco/esforço." },
-  { min: 1.6, label: "Sistema bom", tone: "gold", hint: "Qualidade já aceitável." },
-  { min: 2.0, label: "Muito bom", tone: "green", hint: "Resultados consistentes e lucrativos." },
-  { min: 3.0, label: "Excelente", tone: "green", hint: "Alta qualidade e confiabilidade." },
-  { min: 7.0, label: "Excepcional", tone: "purple", hint: "Extremamente raro." },
+  { min: -Infinity, label: "Em construção", tone: "red", hint: "Foque em disciplina e gestão de risco — a consistência ainda vai aparecer." },
+  { min: 1.0, label: "Razoável", tone: "gold", hint: "Já existe um edge; dá pra ganhar consistência." },
+  { min: 1.6, label: "Bom", tone: "green", hint: "Sistema sólido e consistente." },
+  { min: 2.5, label: "Muito bom", tone: "green", hint: "Resultados consistentes e lucrativos." },
+  { min: 4.0, label: "Excelente", tone: "purple", hint: "Alta qualidade e confiabilidade." },
 ];
 const sqnBand = (v) => SQN_BANDS.reduce((acc, b) => v >= b.min ? b : acc, SQN_BANDS[0]);
 
@@ -1570,6 +1570,69 @@ function Curve({ points, title, sub, total, unit = "R", color }) {
           <path d={line} fill="none" stroke={col} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
           <circle cx={x(np - 1)} cy={y(points[np - 1])} r="4" fill={col} />
         </svg>
+      </div>
+    </Card>
+  );
+}
+
+// Donut (rosca) — distribuição de uma métrica em segmentos coloridos.
+function Donut({ title, segments, centerLabel, centerSub }) {
+  const total = segments.reduce((s, x) => s + (x.value || 0), 0);
+  if (!total) return null;
+  const cx = 100, cy = 100, R = 78, r = 50;
+  const segs = segments.filter(s => s.value > 0);
+  let acc = 0;
+  const arcs = segs.map(seg => {
+    const frac = seg.value / total;
+    const a0 = acc * 2 * Math.PI - Math.PI / 2; acc += frac;
+    const a1 = acc * 2 * Math.PI - Math.PI / 2;
+    const large = frac > 0.5 ? 1 : 0;
+    const p = (rad, ang) => [cx + rad * Math.cos(ang), cy + rad * Math.sin(ang)];
+    const [x0, y0] = p(R, a0), [x1, y1] = p(R, a1), [xi1, yi1] = p(r, a1), [xi0, yi0] = p(r, a0);
+    const d = `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${R} ${R} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)} L ${xi1.toFixed(1)} ${yi1.toFixed(1)} A ${r} ${r} 0 ${large} 0 ${xi0.toFixed(1)} ${yi0.toFixed(1)} Z`;
+    return { d, ...seg, frac };
+  });
+  return (
+    <Card style={{ overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 14, fontWeight: 700, color: T.text }}>{title}</div>
+      <div style={{ display: "flex", gap: 16, padding: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <svg viewBox="0 0 200 200" style={{ width: 150, height: 150, flexShrink: 0 }}>
+          {segs.length === 1
+            ? <circle cx={cx} cy={cy} r={(R + r) / 2} fill="none" stroke={segs[0].color} strokeWidth={R - r} />
+            : arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} />)}
+          {centerLabel != null && <text x={cx} y={cy - 2} textAnchor="middle" fontSize="30" fontWeight="800" fill={T.text} fontFamily={T.mono}>{centerLabel}</text>}
+          {centerSub && <text x={cx} y={cy + 18} textAnchor="middle" fontSize="11" fill={T.dim}>{centerSub}</text>}
+        </svg>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, flex: 1, minWidth: 120 }}>
+          {arcs.map((a, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, alignItems: "center" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 7, color: T.mut }}><span style={{ width: 10, height: 10, borderRadius: 3, background: a.color, flexShrink: 0 }} />{a.label}</span>
+              <span style={{ color: T.text, fontFamily: T.mono }}>{a.value} · {(a.frac * 100).toFixed(0)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// Barras horizontais (largura ∝ |valor|, cor pelo sinal). rows: [{label, value, meta}]
+function BarsH({ title, rows }) {
+  if (!rows || !rows.length) return null;
+  const max = Math.max(1, ...rows.map(r => Math.abs(r.value)));
+  return (
+    <Card style={{ overflow: "hidden" }}>
+      <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>{title}</div>
+      <div style={{ padding: "12px 18px", display: "flex", flexDirection: "column", gap: 9 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(110px, 150px) 1fr 70px", gap: 10, alignItems: "center" }}>
+            <div style={{ fontSize: 12, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}{r.meta && <span style={{ color: T.dim }}> · {r.meta}</span>}</div>
+            <div style={{ height: 16, background: T.inset, borderRadius: 5, overflow: "hidden", position: "relative" }}>
+              <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: (Math.abs(r.value) / max) * 100 + "%", background: signTone(r.value), opacity: 0.8, borderRadius: 5 }} />
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: signTone(r.value), fontFamily: T.mono, textAlign: "right" }}>{fmtR(r.value, 1)}</div>
+          </div>
+        ))}
       </div>
     </Card>
   );
@@ -1804,28 +1867,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
   }
 
   const months = Object.keys(s.byMonth).sort();
-  const maxAbsMonth = Math.max(1, ...months.map(m => Math.abs(s.byMonth[m])));
   const mLabel = (ym) => { const [y, mm] = ym.split("-"); return ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][+mm - 1] + "/" + y.slice(2); };
-
-  const Breakdown = ({ title, obj }) => {
-    const rows = Object.entries(obj).sort((a, b) => b[1].somaR - a[1].somaR);
-    if (!rows.length) return null;
-    return (
-      <Card style={{ overflow: "hidden" }}>
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 14, fontWeight: 700, color: T.text }}>{title}</div>
-        <div>
-          {rows.map(([k, v]) => (
-            <div key={k} style={{ display: "grid", gridTemplateColumns: "1fr 70px 70px 60px", gap: 8, padding: "9px 16px", borderBottom: "1px solid " + T.line, fontFamily: T.mono, fontSize: 13, alignItems: "center" }}>
-              <div style={{ color: T.text, fontFamily: T.sans }}>{k}</div>
-              <div style={{ textAlign: "right", color: T.dim }}>{v.n} ops</div>
-              <div style={{ textAlign: "right", color: T.mut }}>{((v.w / v.n) * 100).toFixed(0)}%</div>
-              <div style={{ textAlign: "right", fontWeight: 700, color: signTone(v.somaR) }}>{fmtR(v.somaR, 1)}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-    );
-  };
 
   const chip = (active) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid " + (active ? T.lineGold : T.line), background: active ? T.goldSoft : "transparent", color: active ? T.gold : T.mut });
 
@@ -1909,32 +1951,24 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
         );
       })()}
 
-      {/* Resultado por mês */}
-      {months.length > 0 && (
-        <Card style={{ overflow: "hidden" }}>
-          <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>Resultado por mês (R)</div>
-          <div style={{ padding: "12px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-            {months.map(m => {
-              const v = s.byMonth[m]; const w = (Math.abs(v) / maxAbsMonth) * 100;
-              return (
-                <div key={m} style={{ display: "grid", gridTemplateColumns: "70px 1fr 70px", gap: 10, alignItems: "center" }}>
-                  <div style={{ fontSize: 12, color: T.mut, fontFamily: T.mono }}>{mLabel(m)}</div>
-                  <div style={{ height: 16, background: T.inset, borderRadius: 5, overflow: "hidden", position: "relative" }}>
-                    <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: w + "%", background: signTone(v), opacity: 0.8, borderRadius: 5 }} />
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: signTone(v), fontFamily: T.mono, textAlign: "right" }}>{fmtR(v, 1)}</div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
+      {/* Distribuição (donuts) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))", gap: 12 }}>
+        <Donut title="Acertos × Erros" segments={[{ label: "Gains", value: s.gains, color: T.green }, { label: "Loss", value: s.losses, color: T.red }]} centerLabel={(s.winRate * 100).toFixed(0) + "%"} centerSub="acerto" />
+        {(() => {
+          const palette = [T.gold, T.green, T.blue, T.purple, T.red, "#f59e0b", "#22d3ee"];
+          const segs = Object.entries(s.byAtivo).filter(([k]) => k !== "—").sort((a, b) => b[1].n - a[1].n).map(([k, v], i) => ({ label: k, value: v.n, color: palette[i % palette.length] }));
+          return segs.length ? <Donut title="Operações por ativo" segments={segs} centerLabel={s.n} centerSub="ops" /> : null;
+        })()}
+      </div>
 
-      {/* Quebras */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-        <Breakdown title="Por ativo" obj={s.byAtivo} />
-        <Breakdown title="Por direção" obj={s.byDir} />
-        <Breakdown title="Por dia da semana" obj={s.byDow} />
+      {/* Resultado por mês (barras) */}
+      <BarsH title="Resultado por mês (R)" rows={months.map(m => ({ label: mLabel(m), value: s.byMonth[m] }))} />
+
+      {/* Quebras (barras) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+        {[["R por ativo", s.byAtivo], ["R por direção", s.byDir], ["R por dia da semana", s.byDow]].map(([title, obj]) => (
+          <BarsH key={title} title={title} rows={Object.entries(obj).sort((a, b) => b[1].somaR - a[1].somaR).map(([k, v]) => ({ label: k, value: v.somaR, meta: `${v.n} ops · ${((v.w / v.n) * 100).toFixed(0)}%` }))} />
+        ))}
       </div>
 
       {/* Análise com IA */}
