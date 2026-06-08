@@ -1036,10 +1036,11 @@ function ClientesScreen({ session }) {
     setSaving(true); setFormError("");
     try {
       const m = modal;
+      const action = m.mode === "create" ? "create" : "update";
       const base = { user: m.user.trim().toLowerCase(), name: m.name.trim(), expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
       // Papel/permissões só vão no payload quando o super admin edita um não-super.
       const adminFields = (isSuper && !m.targetSuper) ? { role: m.role, ...(m.role === "client" ? { perms: m.perms } : {}) } : {};
-      await api.post("/api/users", { action: m.mode, ...base, ...adminFields });
+      await api.post("/api/users", { action, ...base, ...adminFields });
       setModal(null);
       await load();
     } catch (e) { setFormError(e.message); }
