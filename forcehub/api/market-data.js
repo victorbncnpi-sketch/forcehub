@@ -8,11 +8,23 @@
 //          pois o mini dólar acompanha a cotação do dólar
 // Datas em Unix(segundos) ou ISO; barras sem high/low válidos são descartadas.
 
+import { getRedis } from "./_redis";
+
 const BRAPI_TOKEN = process.env.BRAPI_TOKEN || "";
 const FUT = "https://brapi.dev/api/v2/futures";
 const UA = "Mozilla/5.0 (FORCEHUB)";
 
 const num = (v) => (v == null || isNaN(Number(v)) ? null : Number(v));
+
+// fetch + parse JSON com retry leve (o sandbox de futuros às vezes dá 404/5xx).
+async function getJson(url, tries = 2) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { const r = await fetch(url, { headers: { "user-agent": UA } }); if (r.ok) return await r.json(); last = new Error("HTTP " + r.status); }
+    catch (e) { last = e; }
+  }
+  throw last || new Error("falha");
+}
 
 function toISODate(d) {
   if (d == null) return null;
@@ -65,15 +77,11 @@ async function fetchIbovBars(numDays) {
 // O /historical exige o CONTRATO vigente (ex.: WINM26), não o código genérico.
 // Fluxo: term-structure (descobre o contrato) -> historical desse contrato.
 async function fetchFuture(asset) {
-  const tsr = await fetch(`${FUT}/term-structure?asset=${asset}`, { headers: { "user-agent": UA } });
-  if (!tsr.ok) throw new Error(`futuros ${asset} term-structure HTTP ${tsr.status}`);
-  const ts = await tsr.json();
+  const ts = await getJson(`${FUT}/term-structure?asset=${asset}`);
   const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
   const sym = (contracts.find(c => c && c.symbol) || {}).symbol; // contracts[0] = vencimento mais próximo
   if (!sym) throw new Error(`futuros ${asset} sem contrato vigente`);
-  const r = await fetch(`${FUT}/historical?symbol=${encodeURIComponent(sym)}`, { headers: { "user-agent": UA } });
-  if (!r.ok) throw new Error(`futuros ${sym} HTTP ${r.status}`);
-  const bars = findBarsArray(await r.json());
+  const bars = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(sym)}`)); // série em future.history[]
   if (!bars || !bars.length) throw new Error(`futuros ${sym} sem barras`);
   return mapBars(bars);
 }
@@ -109,6 +117,12 @@ export default async function handler(req, res) {
   }
 
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
+  const redis = getRedis();
+  const cacheKey = "forcehub:marketdata:" + numDays;
+  if (redis && req.query.refresh !== "1") {
+    try { const c = await redis.get(cacheKey); if (c && c.generatedAt && (Date.now() - c.generatedAt) < 20 * 60 * 1000) return res.status(200).json({ ...c, cached: true }); } catch (_) {}
+  }
+
   const data = { WIN: [], WDO: [], IBOV: [] };
   const sources = {};
   const errors = [];
@@ -133,5 +147,10 @@ export default async function handler(req, res) {
     catch (e2) { errors.push({ ticker: "WDO", error: e1.message + " | " + e2.message }); }
   }
 
-  return res.status(200).json({ ok: true, data, sources, errors });
+  const payload = { ok: true, data, sources, errors, generatedAt: Date.now() };
+  // Não cacheia respostas vazias (evita fixar um erro total); fallback ao último bom.
+  const total = data.WIN.length + data.WDO.length + data.IBOV.length;
+  if (redis && total) { try { await redis.set(cacheKey, payload, { ex: 60 * 60 * 24 }); } catch (_) {} }
+  else if (redis && !total) { try { const c = await redis.get(cacheKey); if (c) return res.status(200).json({ ...c, cached: true, stale: true }); } catch (_) {} }
+  return res.status(200).json(payload);
 }
