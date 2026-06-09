@@ -47,16 +47,21 @@ async function generate(today, todayBRT) {
   let events = [];
   let source = "forexfactory";
 
-  // Busca em paralelo: agenda (feed) + resumo (IA) + manchetes (IA).
+  // Busca em paralelo: agenda (feed) + resumo (IA) + manchetes (RSS real).
   const [evtRes, sumRes, headRes] = await Promise.allSettled([
     fetchForexFactory(todayBRT),
     briefSummary(today),
-    fetchHeadlines(today),
+    fetchRssHeadlines(),
   ]);
 
   if (evtRes.status === "fulfilled") events = evtRes.value;
   let summary = sumRes.status === "fulfilled" ? String(sumRes.value || "").trim() : "";
-  const headlines = headRes.status === "fulfilled" ? headRes.value : [];
+  let headlines = headRes.status === "fulfilled" ? headRes.value : [];
+
+  // Fallback: se nenhum feed RSS respondeu, gera manchetes pela IA.
+  if (!headlines.length) {
+    try { headlines = await fetchHeadlines(today); } catch (_) {}
+  }
 
   // Fallback: se o feed não trouxe eventos, gera a agenda pela IA.
   if (!events.length) {
@@ -108,7 +113,62 @@ async function briefSummary(today) {
   return geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 900, temperature: 0.3 });
 }
 
-// ─── IA: manchetes do mercado ────────────────────────────────────────────────
+// ─── RSS: manchetes reais (com link) ─────────────────────────────────────────
+const RSS_FEEDS = [
+  { url: "https://www.infomoney.com.br/mercados/feed/", source: "InfoMoney" },
+  { url: "https://www.moneytimes.com.br/mercados/feed/", source: "Money Times" },
+  { url: "https://www.infomoney.com.br/economia/feed/", source: "InfoMoney" },
+];
+
+function decodeEntities(s) {
+  return String(s)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&#8217;|&#8216;|&rsquo;|&lsquo;|&#39;|&apos;/g, "'")
+    .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|&quot;/g, '"')
+    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "–")
+    .replace(/&hellip;|&#8230;/g, "…")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ").trim();
+}
+
+function pickTag(block, tag) {
+  const m = block.match(new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "i"));
+  return m ? m[1] : "";
+}
+
+async function fetchOneFeed(feed) {
+  const r = await fetch(feed.url, { headers: { "user-agent": "Mozilla/5.0 (FORCEHUB)", "accept": "application/rss+xml, application/xml, text/xml" } });
+  if (!r.ok) throw new Error(feed.source + " HTTP " + r.status);
+  const xml = await r.text();
+  const blocks = xml.split(/<item[\s>]/i).slice(1);
+  return blocks.map(b => {
+    const title = decodeEntities(pickTag(b, "title"));
+    const url = decodeEntities(pickTag(b, "link"));
+    const pub = pickTag(b, "pubDate");
+    const ts = pub ? Date.parse(pub) || 0 : 0;
+    return { title, url, source: feed.source, ts };
+  }).filter(h => h.title && h.url);
+}
+
+async function fetchRssHeadlines() {
+  const results = await Promise.allSettled(RSS_FEEDS.map(fetchOneFeed));
+  const all = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
+  if (!all.length) return [];
+  // Dedup por título e ordena pela mais recente.
+  const seen = new Set();
+  const unique = [];
+  for (const h of all.sort((a, b) => b.ts - a.ts)) {
+    const key = h.title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ title: h.title, url: h.url, source: h.source });
+    if (unique.length >= 12) break;
+  }
+  return unique;
+}
+
+// ─── IA: manchetes do mercado (fallback) ─────────────────────────────────────
 async function fetchHeadlines(today) {
   const prompt = "Hoje e " + today + ". Use a busca na web. Liste as principais MANCHETES do mercado financeiro de hoje " +
     "(Brasil e global): bolsa/Ibovespa, juros (Selic/Fed), cambio/dolar, commodities, empresas e economia. " +
