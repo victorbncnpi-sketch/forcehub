@@ -352,18 +352,6 @@ function Sparkline({ data, color, width = 48, height = 22 }) {
     </svg>
   );
 }
-function FngBadge({ fng }) {
-  if (!fng || fng.value == null) return null;
-  const v = fng.value;
-  const c = v < 25 ? T.red : v < 45 ? "#e0982f" : v < 55 ? T.gold : v < 75 ? "#7bbf5a" : T.green;
-  const pt = { "Extreme Fear": "Medo Extremo", "Fear": "Medo", "Neutral": "Neutro", "Greed": "Ganância", "Extreme Greed": "Ganância Extrema" }[fng.label] || fng.label;
-  return (
-    <span title="Índice Medo & Ganância (cripto)" style={{ fontSize: 11, fontWeight: 700, color: c, display: "flex", alignItems: "center", gap: 5 }}>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, display: "inline-block" }} />{v} · {pt}
-    </span>
-  );
-}
-
 function MarketBoard({ title, items, group, favs, onToggleFav, reorderable, onReorder, headerExtra }) {
   const dragSym = useRef(null);
   return (
@@ -618,7 +606,7 @@ function PanoramaScreen() {
         <MarketBoard title="Futuros" items={srt(mkt?.groups?.futuros)} group="indices" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Moedas" items={srt(mkt?.groups?.moedas)} group="moedas" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Commodities" items={srt(mkt?.groups?.commodities)} group="commodities" favs={favSet} onToggleFav={toggleFav} />
-        <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} headerExtra={<FngBadge fng={mkt?.fng} />} />
+        <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} />
       </div>
 
       {/* Indicadores (agenda) + Notícias em duas colunas */}
