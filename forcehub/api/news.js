@@ -104,9 +104,11 @@ async function generate(today, todayBRT) {
   return { summary, events, headlines, source };
 }
 
-// Fonte dos eventos: FMP (com 'actual') quando há chave; senão ForexFactory.
+// Fonte dos eventos: ForexFactory (gratuito). O calendário do FMP é pago
+// (free tier responde 402/403), então só tenta se explicitamente habilitado
+// via FMP_CALENDAR=1 — assim não desperdiça cota nem adiciona latência.
 async function fetchEvents(todayBRT) {
-  if (FMP_KEY) {
+  if (FMP_KEY && process.env.FMP_CALENDAR === "1") {
     try { const events = await fetchFMP(todayBRT); if (events.length) return { events, source: "fmp" }; } catch (_) {}
   }
   return { events: await fetchForexFactory(todayBRT), source: "forexfactory" };

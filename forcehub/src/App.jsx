@@ -221,11 +221,12 @@ function AgendaPanel({ events, loading }) {
   const toggleImpact = (k) => setImpacts(m => ({ ...m, [k]: !m[k] }));
   const filtered = events.filter(e => impacts[e.impact] && !excluded.includes(e.country));
 
-  const COLS = "52px 32px 1fr 70px 70px 70px";
+  const COLS = "52px 32px 1fr 80px 80px";
+  const TE_URL = "https://tradingeconomics.com/calendar";
   const chipStyle = (active, tone = T.gold) => ({ fontSize: 12, padding: "5px 10px", borderRadius: 8, border: "1px solid " + (active ? tone + "66" : T.line), background: active ? tone + "1a" : "transparent", color: active ? tone : T.mut });
 
   const renderRow = (n, i) => (
-    <div key={i} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, alignItems: "center", padding: "10px 12px", background: T.inset, border: "1px solid " + T.line, borderLeft: "3px solid " + impactColor(n.impact), borderRadius: 10 }}>
+    <a key={i} href={TE_URL} target="_blank" rel="noopener noreferrer" title="Ver o resultado no Trading Economics" style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, alignItems: "center", padding: "10px 12px", background: T.inset, border: "1px solid " + T.line, borderLeft: "3px solid " + impactColor(n.impact), borderRadius: 10, textDecoration: "none", cursor: "pointer" }}>
       <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, fontFamily: T.mono }}>{n.time || "—"}</div>
       <div style={{ fontSize: 19, textAlign: "center" }} title={n.country}>{flagOf(n.country)}</div>
       <div>
@@ -234,15 +235,14 @@ function AgendaPanel({ events, loading }) {
       </div>
       <div style={{ textAlign: "right", fontSize: 12, color: T.mut, fontFamily: T.mono }}>{n.previous || "—"}</div>
       <div style={{ textAlign: "right", fontSize: 12, color: T.gold, fontFamily: T.mono }}>{n.forecast || "—"}</div>
-      <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: n.actual ? T.green : T.dim, fontFamily: T.mono }}>{n.actual || "—"}</div>
-    </div>
+    </a>
   );
 
   return (
     <Card style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Agenda econômica — hoje</div>
-        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>{filtered.length} de {events.length} eventos · impacto 🐂 a 🐂🐂🐂</div>
+        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>{filtered.length} de {events.length} eventos · impacto 🐂 a 🐂🐂🐂 · toque num evento p/ ver o resultado ↗</div>
       </div>
 
       {events.length > 0 && (
@@ -267,9 +267,9 @@ function AgendaPanel({ events, loading }) {
         : filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum evento com os filtros atuais.</div>
         : (
           <div className="fh-scroll-x" style={{ padding: 12 }}>
-            <div style={{ minWidth: 460, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ minWidth: 400, display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "0 12px" }}>
-                {["HORA", "PAÍS", "EVENTO", "ANT.", "PREV.", "ATUAL"].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k > 2 ? "right" : "left" }}>{h}</div>)}
+                {["HORA", "PAÍS", "EVENTO", "ANT.", "PREV."].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k > 2 ? "right" : "left" }}>{h}</div>)}
               </div>
               {grouped
                 ? countriesAll.filter(c => !excluded.includes(c)).map(c => {
