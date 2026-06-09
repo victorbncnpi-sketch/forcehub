@@ -85,6 +85,28 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET");
 
+  // Sondagem do sandbox de futuros (sem token): /api/market-data?probe=futures
+  if (req.query.probe === "futures") {
+    const out = {};
+    for (const asset of ["WIN", "WDO"]) {
+      out[asset] = {};
+      const urls = [
+        ["term-structure", `${FUT}/term-structure?asset=${asset}`],
+        ["historical-asset", `${FUT}/historical?symbol=${asset}`],
+        ["quote", `${FUT}/quote?symbols=${asset}`],
+      ];
+      for (const [label, url] of urls) {
+        try {
+          const r = await fetch(url, { headers: { "user-agent": UA } });
+          const text = await r.text();
+          let j = null; try { j = JSON.parse(text); } catch (_) {}
+          out[asset][label] = { status: r.status, topKeys: j && typeof j === "object" ? Object.keys(j) : null, sample: (j ? JSON.stringify(j) : text).slice(0, 500) };
+        } catch (e) { out[asset][label] = { error: String((e && e.message) || e) }; }
+      }
+    }
+    return res.status(200).json({ ok: true, probe: out });
+  }
+
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
   const data = { WIN: [], WDO: [], IBOV: [] };
   const errors = [];
