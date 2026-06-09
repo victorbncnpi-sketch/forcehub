@@ -43,6 +43,13 @@ export default async function handler(req, res) {
   const refresh = req.query.refresh === "1" || req.query.refresh === "true";
   const redis = getRedis();
 
+  // Modo diagnóstico do FMP: /api/news?debug=1
+  if (req.query.debug === "1") {
+    const info = { fmpKeyPresent: !!FMP_KEY, todayBRT };
+    if (FMP_KEY) info.probe = await fmpProbe(todayBRT);
+    return res.status(200).json({ ok: true, debug: info });
+  }
+
   try {
     if (!refresh && redis) {
       const cached = await redis.get(cacheKey);
@@ -103,6 +110,31 @@ async function fetchEvents(todayBRT) {
     try { const events = await fetchFMP(todayBRT); if (events.length) return { events, source: "fmp" }; } catch (_) {}
   }
   return { events: await fetchForexFactory(todayBRT), source: "forexfactory" };
+}
+
+// Diagnóstico do FMP (não cacheia, não vaza a chave): mostra status + amostra.
+async function fmpProbe(todayBRT) {
+  const tomorrow = new Date(new Date(todayBRT + "T12:00:00Z").getTime() + 864e5).toISOString().slice(0, 10);
+  const qs = `from=${todayBRT}&to=${tomorrow}&apikey=${FMP_KEY}`;
+  const urls = [
+    ["stable", "https://financialmodelingprep.com/stable/economic-calendar?" + qs],
+    ["v3", "https://financialmodelingprep.com/api/v3/economic_calendar?" + qs],
+  ];
+  const tried = [];
+  for (const [label, u] of urls) {
+    try {
+      const r = await fetch(u, { headers: { accept: "application/json" } });
+      const text = await r.text();
+      let json = null; try { json = JSON.parse(text); } catch (_) {}
+      tried.push({
+        endpoint: label, status: r.status, isArray: Array.isArray(json),
+        len: Array.isArray(json) ? json.length : null,
+        sample: Array.isArray(json) ? json.slice(0, 2) : String(text).slice(0, 200),
+      });
+    } catch (e) { tried.push({ endpoint: label, error: String((e && e.message) || e) }); }
+  }
+  let filtered = null; try { filtered = (await fetchFMP(todayBRT)).length; } catch (e) { filtered = "erro: " + String((e && e.message) || e); }
+  return { tried, filteredHoje: filtered };
 }
 
 // ─── FMP — Economic Calendar (inclui valor realizado) ────────────────────────
