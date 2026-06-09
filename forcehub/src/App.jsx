@@ -626,16 +626,72 @@ const tradePot = (x) => { const r = ((x.alvo - x.entrada) / x.entrada) * 100; re
 const tradeRisco = (x) => { const r = ((x.stop - x.entrada) / x.entrada) * 100; return tradeDir(x) === "VENDA" ? -r : r; }; // risco até o stop (%) — negativo
 const closePct = (p, saida) => { const r = ((saida - p.entrada) / p.entrada) * 100; return tradeDir(p) === "VENDA" ? -r : r; };
 
-function PosicaoRow({ p, onFechar, onRemove }) {
+// ─── Cotação ao vivo na Carteira (marcação a mercado) ────────────────────────
+const liveResult = (item, price) => closePct(item, price); // % desde a entrada (direção-aware)
+const hitTarget = (item, price) => tradeDir(item) === "VENDA" ? price <= Number(item.alvo) : price >= Number(item.alvo);
+const hitStop = (item, price) => tradeDir(item) === "VENDA" ? price >= Number(item.stop) : price <= Number(item.stop);
+
+function LiveBar({ item, price }) {
+  const s = Number(item.stop), e = Number(item.entrada), a = Number(item.alvo);
+  const span = a - s;
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const ePos = span ? clamp((e - s) / span) : 0.5;
+  const pPos = span ? clamp((price - s) / span) : 0.5;
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ position: "relative", height: 6, borderRadius: 3, background: "linear-gradient(90deg," + T.red + "66," + T.gold + "44," + T.green + "66)" }}>
+        <div title="Entrada" style={{ position: "absolute", left: "calc(" + (ePos * 100) + "% - 1px)", top: -2, width: 2, height: 10, background: T.text, opacity: 0.75 }} />
+        <div title="Preço atual" style={{ position: "absolute", left: "calc(" + (pPos * 100) + "% - 5px)", top: -4, width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderTop: "7px solid " + T.gold }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 10, color: T.dim, fontFamily: T.mono }}>
+        <span style={{ color: T.red }}>stop {s.toFixed(2)}</span>
+        <span>entrada {e.toFixed(2)}</span>
+        <span style={{ color: T.green }}>alvo {a.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
+function LivePanel({ item, cot }) {
+  if (!cot || cot.price == null) return null;
+  const price = cot.price;
+  const res = liveResult(item, price), up = res >= 0;
+  const dayUp = (cot.changePct ?? 0) >= 0;
+  const tgt = hitTarget(item, price), stp = hitStop(item, price);
+  return (
+    <div style={{ padding: "0 16px 14px" }}>
+      <div style={{ background: T.inset, border: "1px solid " + (tgt ? T.green + "66" : stp ? T.red + "66" : T.line), borderRadius: 10, padding: "11px 13px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span title={cot.stale ? "último valor conhecido" : "ao vivo (delay ~15min)"} style={{ width: 7, height: 7, borderRadius: "50%", background: cot.stale ? T.dim : T.green, boxShadow: cot.stale ? "none" : "0 0 6px " + T.green }} />
+            <span style={{ fontSize: 11, color: T.dim }}>ATUAL</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: T.text, fontFamily: T.mono }}>R$ {price.toFixed(2)}</span>
+            {cot.changePct != null && <span style={{ fontSize: 12, fontWeight: 700, color: dayUp ? T.green : T.red, fontFamily: T.mono }}>{(dayUp ? "▲ +" : "▼ ") + cot.changePct.toFixed(2)}%</span>}
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 10, color: T.dim }}>DESDE A ENTRADA</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: up ? T.green : T.red, fontFamily: T.mono }}>{(up ? "+" : "") + res.toFixed(2)}%</div>
+          </div>
+        </div>
+        <LiveBar item={item} price={price} />
+        {(tgt || stp) && <div style={{ marginTop: 9 }}><Badge tone={tgt ? "green" : "red"}>{tgt ? "🎯 Alvo atingido" : "🛑 Stop atingido"}</Badge></div>}
+      </div>
+    </div>
+  );
+}
+
+function PosicaoRow({ p, cot, onFechar, onRemove }) {
   const [saida, setSaida] = useState("");
   const isAberta = p.status === "ABERTA";
   const venda = tradeDir(p) === "VENDA";
-  const pct = p.precoSaida != null ? closePct(p, p.precoSaida).toFixed(2) : null;
-  const pctColor = pct == null ? T.dim : parseFloat(pct) >= 0 ? T.green : T.red;
+  const live = isAberta && cot && cot.price != null ? closePct(p, cot.price) : null;
+  const pctVal = p.precoSaida != null ? closePct(p, p.precoSaida) : (live != null ? live : null);
+  const pctColor = pctVal == null ? T.dim : pctVal >= 0 ? T.green : T.red;
+  const hit = live != null && hitTarget(p, cot.price) ? " 🎯" : live != null && hitStop(p, cot.price) ? " 🛑" : "";
   return (
     <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: T.gold }}>{p.ticker}</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: T.gold }}>{p.ticker}{hit}</div>
         <div style={{ fontSize: 10, color: venda ? T.red : T.green, fontWeight: 700 }}>{venda ? "▼ VENDA" : "▲ COMPRA"}</div>
         <div style={{ fontSize: 11, color: T.dim }}>{p.dataEntrada}</div>
       </div>
@@ -643,8 +699,11 @@ function PosicaoRow({ p, onFechar, onRemove }) {
       <div style={{ fontSize: 13, color: T.text }}>R$ {p.entrada.toFixed(2)}</div>
       <div style={{ fontSize: 13, color: T.green }}>R$ {p.alvo.toFixed(2)}</div>
       <div style={{ fontSize: 13, color: T.red }}>R$ {p.stop.toFixed(2)}</div>
-      <div style={{ fontSize: 13, color: p.precoSaida ? T.gold : T.dim }}>{p.precoSaida ? "R$ " + p.precoSaida.toFixed(2) : "—"}</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: pctColor }}>{pct == null ? "—" : (parseFloat(pct) >= 0 ? "+" : "") + pct + "%"}</div>
+      <div style={{ fontSize: 13, color: p.precoSaida ? T.gold : (live != null ? T.mut : T.dim), display: "flex", alignItems: "center", gap: 5 }}>
+        {live != null && <span title={cot.stale ? "último valor conhecido" : "ao vivo (delay ~15min)"} style={{ width: 6, height: 6, borderRadius: "50%", background: cot.stale ? T.dim : T.green, flexShrink: 0 }} />}
+        {p.precoSaida ? "R$ " + p.precoSaida.toFixed(2) : (live != null ? "R$ " + cot.price.toFixed(2) : "—")}
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: pctColor }}>{pctVal == null ? "—" : (pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%"}</div>
       <div>
         {isAberta ? (
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -772,6 +831,8 @@ function CarteiraScreen({ canWrite }) {
   const [imgBusy, setImgBusy] = useState(false);
   const recFileRef = useRef(null);
   const idRef = useRef(1);
+  const [cotacoes, setCotacoes] = useState({});
+  const [cotAt, setCotAt] = useState(0);
 
   const pickRecImage = async (file) => {
     if (!file) return;
@@ -797,6 +858,23 @@ function CarteiraScreen({ canWrite }) {
     })();
     return () => { active = false; };
   }, []);
+
+  // Cotações ao vivo (delay ~15min) dos tickers em recomendações ativas + posições abertas.
+  useEffect(() => {
+    let active = true;
+    const tickers = [...new Set([
+      ...acoes.filter(a => a.status !== "ENCERRADA").map(a => a.ticker),
+      ...posicoes.filter(p => p.status === "ABERTA").map(p => p.ticker),
+    ].filter(Boolean))];
+    if (!tickers.length) { setCotacoes({}); return; }
+    const load = async () => {
+      try { const j = await api.get("/api/cotacoes?tickers=" + encodeURIComponent(tickers.join(","))); if (active && j && j.quotes) { setCotacoes(j.quotes); setCotAt(j.generatedAt || Date.now()); } }
+      catch (e) { /* mantém o último valor */ }
+    };
+    load();
+    const t = setInterval(load, 60000);
+    return () => { active = false; clearInterval(t); };
+  }, [acoes, posicoes]);
 
   const saveRecs = async (recs) => {
     try { await api.post("/api/carteira", { recomendacoes: recs, posicoes: [] }); }
@@ -1007,6 +1085,7 @@ function CarteiraScreen({ canWrite }) {
                       </div>
                       <div style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>{a.addedAt}</div>
                     </div>
+                    <LivePanel item={a} cot={cotacoes[a.ticker]} />
                     <div style={{ padding: "0 16px 14px" }}>
                       {minhaPos
                         ? <Button variant="ghost" size="sm" disabled style={{ width: "100%" }}>{minhaPos.status === "ABERTA" ? "✓ Você está acompanhando" : "✓ Você acompanhou (encerrada)"}</Button>
@@ -1034,6 +1113,11 @@ function CarteiraScreen({ canWrite }) {
           </div>
 
           <EquityCurve positions={posicoes} />
+          {abertas > 0 && Object.keys(cotacoes).length > 0 && (
+            <div style={{ fontSize: 11, color: T.dim, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> Preços ao vivo · delay ~15min{cotAt ? " · atualizado " + fmtTime(cotAt) : ""} — colunas SAÍDA/RENT.% marcam a mercado as posições abertas.
+            </div>
+          )}
           {posicoes.length === 0 ? (
             <EmptyState icon={<Icon name="positions" size={40} color={T.dim} />} title="Nenhuma posição registrada" desc="Na aba Recomendações, clique em “Aceitar e acompanhar” para começar a registrar suas operações." />
           ) : (
@@ -1043,7 +1127,7 @@ function CarteiraScreen({ canWrite }) {
                   <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
                     {["TICKER", "EMPRESA", "ENTRADA", "ALVO", "STOP", "SAÍDA", "RENT.%", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
                   </div>
-                  {posPg.slice.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} onRemove={removerPosicao} />)}
+                  {posPg.slice.map(p => <PosicaoRow key={p.posId} p={p} cot={cotacoes[p.ticker]} onFechar={fecharPosicao} onRemove={removerPosicao} />)}
                 </div>
               </div>
               <Pager info={posPg} setPage={setPosPage} label="posições" />
