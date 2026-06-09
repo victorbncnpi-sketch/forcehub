@@ -114,10 +114,15 @@ async function briefSummary(today) {
 }
 
 // ─── RSS: manchetes reais (com link) ─────────────────────────────────────────
+// Google News RSS é acessível de datacenter (a Vercel) e traz manchetes reais
+// com link + nome do veículo. InfoMoney/Money Times entram como reforço, mas
+// costumam bloquear requisições de datacenter (Cloudflare) — por isso opcionais.
+const gnews = (q) => "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:2d") + "&hl=pt-BR&gl=BR&ceid=BR:pt";
 const RSS_FEEDS = [
+  { url: gnews("Ibovespa OR bolsa OR \"mercado financeiro\""), source: "" },
+  { url: gnews("dólar OR juros OR Selic OR \"economia brasil\""), source: "" },
+  { url: gnews("Fed OR \"bolsas de Nova York\" OR petróleo OR commodities"), source: "" },
   { url: "https://www.infomoney.com.br/mercados/feed/", source: "InfoMoney" },
-  { url: "https://www.moneytimes.com.br/mercados/feed/", source: "Money Times" },
-  { url: "https://www.infomoney.com.br/economia/feed/", source: "InfoMoney" },
 ];
 
 function decodeEntities(s) {
@@ -138,16 +143,20 @@ function pickTag(block, tag) {
 }
 
 async function fetchOneFeed(feed) {
-  const r = await fetch(feed.url, { headers: { "user-agent": "Mozilla/5.0 (FORCEHUB)", "accept": "application/rss+xml, application/xml, text/xml" } });
-  if (!r.ok) throw new Error(feed.source + " HTTP " + r.status);
+  const r = await fetch(feed.url, { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "accept": "application/rss+xml, application/xml, text/xml" } });
+  if (!r.ok) throw new Error((feed.source || "rss") + " HTTP " + r.status);
   const xml = await r.text();
   const blocks = xml.split(/<item[\s>]/i).slice(1);
   return blocks.map(b => {
-    const title = decodeEntities(pickTag(b, "title"));
+    let title = decodeEntities(pickTag(b, "title"));
     const url = decodeEntities(pickTag(b, "link"));
     const pub = pickTag(b, "pubDate");
     const ts = pub ? Date.parse(pub) || 0 : 0;
-    return { title, url, source: feed.source, ts };
+    // Google News: o veículo vem em <source> e o título termina com " - Veículo".
+    const srcTag = decodeEntities(pickTag(b, "source"));
+    const source = feed.source || srcTag;
+    if (srcTag && title.endsWith(" - " + srcTag)) title = title.slice(0, -(srcTag.length + 3)).trim();
+    return { title, url, source, ts };
   }).filter(h => h.title && h.url);
 }
 
