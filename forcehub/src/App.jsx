@@ -338,6 +338,20 @@ const fmtPrice = (p, group) => {
   if (p >= 1) return p.toFixed(2);
   return p.toFixed(4);
 };
+function Sparkline({ data, color, width = 48, height = 22 }) {
+  if (!data || data.length < 2) return <svg width={width} height={height} aria-hidden style={{ display: "block" }} />;
+  const min = Math.min(...data), max = Math.max(...data), range = (max - min) || 1, pad = 2;
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = pad + (height - 2 * pad) * (1 - (v - min) / range);
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  return (
+    <svg width={width} height={height} aria-hidden style={{ display: "block" }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.3} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
+    </svg>
+  );
+}
 function MarketBoard({ title, items, group }) {
   return (
     <Card style={{ overflow: "hidden" }}>
@@ -352,8 +366,9 @@ function MarketBoard({ title, items, group }) {
           : items.map((it, i) => {
             const up = (it.changePct ?? 0) >= 0;
             return (
-              <div key={it.symbol} style={{ display: "grid", gridTemplateColumns: "1fr auto 70px", gap: 8, alignItems: "center", padding: "8px 14px", borderBottom: i < items.length - 1 ? "1px solid " + T.line : "none" }}>
+              <div key={it.symbol} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 48px auto 62px", gap: 8, alignItems: "center", padding: "7px 14px", borderBottom: i < items.length - 1 ? "1px solid " + T.line : "none" }}>
                 <span style={{ fontSize: 13, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
+                <Sparkline data={it.spark} color={it.changePct == null ? T.dim : up ? T.green : T.red} />
                 <span style={{ fontSize: 13, fontWeight: 700, color: T.text, fontFamily: T.mono, textAlign: "right" }}>{fmtPrice(it.price, group)}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, fontFamily: T.mono, color: it.changePct == null ? T.dim : up ? T.green : T.red, textAlign: "right" }}>
                   {it.changePct == null ? "—" : (up ? "▲" : "▼") + " " + (up ? "+" : "") + it.changePct.toFixed(2) + "%"}
@@ -556,7 +571,7 @@ function PanoramaScreen() {
         {mkt?.generatedAt && <span style={{ fontSize: 11, color: T.dim, fontFamily: T.mono }}>atualizado {fmtTime(mkt.generatedAt)}{mkt.stale ? " · offline" : ""}</span>}
       </div>
       <MarketClock />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(265px, 1fr))", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(285px, 1fr))", gap: 14 }}>
         <MarketBoard title="Índices" items={mkt?.groups?.indices} group="indices" />
         <MarketBoard title="Futuros" items={mkt?.groups?.futuros} group="indices" />
         <MarketBoard title="Moedas" items={mkt?.groups?.moedas} group="moedas" />

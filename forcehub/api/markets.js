@@ -33,21 +33,34 @@ const GROUPS = {
 // Cripto via CoinGecko: [id CoinGecko, rótulo].
 const CRYPTO = [["bitcoin", "BTC"], ["ethereum", "ETH"], ["solana", "SOL"], ["binancecoin", "BNB"]];
 
+// Reduz uma série a no máx. `n` pontos uniformemente espaçados (p/ sparkline).
+function downsample(arr, n) {
+  const clean = (arr || []).filter(v => v != null && !Number.isNaN(v));
+  if (clean.length <= n) return clean.map(v => +v.toFixed(4));
+  const step = clean.length / n;
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(+clean[Math.floor(i * step)].toFixed(4));
+  return out;
+}
+
 // ─── Yahoo Finance (endpoint v8 chart — sem chave) ───────────────────────────
 async function fetchYahoo(symbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=5m&range=1d`;
   const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (FORCEHUB)", "accept": "application/json" } });
   if (!r.ok) throw new Error("yahoo " + r.status);
   const j = await r.json();
-  const m = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+  const result = j && j.chart && j.chart.result && j.chart.result[0];
+  const m = result && result.meta;
   if (!m || m.regularMarketPrice == null) throw new Error("sem dados");
   const price = m.regularMarketPrice;
   const prev = m.chartPreviousClose != null ? m.chartPreviousClose : (m.previousClose != null ? m.previousClose : price);
+  const closes = result.indicators && result.indicators.quote && result.indicators.quote[0] && result.indicators.quote[0].close;
   return {
     price,
     change: +(price - prev).toFixed(4),
     changePct: prev ? +(((price / prev) - 1) * 100).toFixed(2) : 0,
     time: m.regularMarketTime ? m.regularMarketTime * 1000 : Date.now(),
+    spark: downsample(closes, 32),
   };
 }
 
@@ -59,13 +72,18 @@ async function fetchGroup(list) {
 // ─── CoinGecko (cripto — sem chave) ──────────────────────────────────────────
 async function fetchCrypto() {
   const ids = CRYPTO.map(c => c[0]).join(",");
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
+  const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}&sparkline=true&price_change_percentage=24h`;
   const r = await fetch(url, { headers: { accept: "application/json" } });
   if (!r.ok) throw new Error("coingecko " + r.status);
-  const j = await r.json();
+  const arr = await r.json();
+  if (!Array.isArray(arr)) throw new Error("coingecko formato");
+  const byId = {};
+  for (const c of arr) byId[c.id] = c;
   return CRYPTO.map(([id, label]) => {
-    const d = j[id] || {};
-    return d.usd != null ? { symbol: id, label, price: d.usd, change: null, changePct: d.usd_24h_change != null ? +d.usd_24h_change.toFixed(2) : null, time: Date.now() } : null;
+    const d = byId[id];
+    if (!d || d.current_price == null) return null;
+    const sp = d.sparkline_in_7d && Array.isArray(d.sparkline_in_7d.price) ? d.sparkline_in_7d.price : [];
+    return { symbol: id, label, price: d.current_price, change: null, changePct: d.price_change_percentage_24h != null ? +d.price_change_percentage_24h.toFixed(2) : null, time: Date.now(), spark: downsample(sp, 32) };
   }).filter(Boolean);
 }
 
