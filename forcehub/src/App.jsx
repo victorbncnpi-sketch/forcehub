@@ -619,6 +619,7 @@ function CarteiraScreen({ canWrite }) {
   const [posicoes, setPosicoes] = useState([]);
   const [aba, setAba] = useState("carteira");
   const [showForm, setShowForm] = useState(false);
+  const [posPage, setPosPage] = useState(1);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState(null);
@@ -737,6 +738,9 @@ function CarteiraScreen({ canWrite }) {
   const fechadas = posicoes.filter(p => p.resultado != null);
   const acumulado = fechadas.reduce((s, p) => s + p.resultado, 0);
   const resultadoTotal = fechadas.length ? (acumulado / fechadas.length) : 0;
+  // Abertas primeiro, depois as fechadas pelas mais recentes — e paginado.
+  const posOrdenadas = [...posicoes].sort((a, b) => (a.status === "ABERTA" ? 0 : 1) - (b.status === "ABERTA" ? 0 : 1));
+  const posPg = pageInfo(posOrdenadas, posPage, 8);
   const recsAtivas = acoes.filter(a => a.status !== "ENCERRADA");
   const recsEncerradas = acoes.filter(a => a.status === "ENCERRADA");
 
@@ -897,9 +901,10 @@ function CarteiraScreen({ canWrite }) {
                   <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
                     {["TICKER", "EMPRESA", "ENTRADA", "ALVO", "STOP", "SAÍDA", "RENT.%", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
                   </div>
-                  {posicoes.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} onRemove={removerPosicao} />)}
+                  {posPg.slice.map(p => <PosicaoRow key={p.posId} p={p} onFechar={fecharPosicao} onRemove={removerPosicao} />)}
                 </div>
               </div>
+              <Pager info={posPg} setPage={setPosPage} label="posições" />
             </Card>
           )}
         </>
@@ -1462,6 +1467,25 @@ const signTone = (v) => v > 0 ? T.green : v < 0 ? T.red : T.mut;
 const TONE_COLOR = { gold: T.gold, green: T.green, red: T.red, blue: T.blue, mut: T.mut, purple: T.purple, text: T.text };
 const tone = (t) => TONE_COLOR[t] || T.text;
 
+// ─── Paginação (evita scroll gigante em listas longas) ────────────────────────
+function pageInfo(items, page, per = 10) {
+  const pages = Math.max(1, Math.ceil(items.length / per));
+  const cur = Math.min(Math.max(1, page), pages);
+  return { slice: items.slice((cur - 1) * per, cur * per), pages, cur, total: items.length, per, from: (cur - 1) * per };
+}
+function Pager({ info, setPage, label = "itens" }) {
+  if (info.pages <= 1) return null;
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid " + T.line, flexWrap: "wrap", gap: 8 }}>
+      <span style={{ fontSize: 12, color: T.dim }}>Página {info.cur} de {info.pages} · {info.total} {label}</span>
+      <div style={{ display: "flex", gap: 6 }}>
+        <Button variant="ghost" size="sm" disabled={info.cur <= 1} onClick={() => setPage(info.cur - 1)}>← Anterior</Button>
+        <Button variant="ghost" size="sm" disabled={info.cur >= info.pages} onClick={() => setPage(info.cur + 1)}>Próxima →</Button>
+      </div>
+    </div>
+  );
+}
+
 // Converte cada fonte num "evento" comum (R quando possível, e R$).
 function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
   const ev = [];
@@ -1647,6 +1671,7 @@ function TradesScreen({ session }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [page, setPage] = useState(1);
   const idRef = useRef(1);
   const today = new Date().toISOString().slice(0, 10);
   const baseForm = { data: today, ativo: "WIN", direcao: "COMPRA", unidade: "R", valor: "", setup: "", notas: "" };
@@ -1689,6 +1714,7 @@ function TradesScreen({ session }) {
 
   const events = buildEvents({ manual: trades, valorR, diario, posicoes: [], includeCarteira: false });
   const lista = [...events].sort((a, b) => b.t - a.t);
+  const pg = pageInfo(lista, page, 10);
 
   const inp = (k) => ({ value: form[k], onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) });
 
@@ -1767,7 +1793,7 @@ function TradesScreen({ session }) {
                 <div style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 44px", gap: 8, padding: "8px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
                   <div>DATA</div><div>ORIGEM</div><div>ATIVO / SETUP</div><div style={{ textAlign: "right" }}>R</div><div style={{ textAlign: "right" }}>R$</div><div></div>
                 </div>
-                {lista.map(e => (
+                {pg.slice.map(e => (
                   <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 44px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
                     <div style={{ fontSize: 12, color: T.mut }}>{e.t ? dmy(e.t) : "—"}</div>
                     <div><Badge tone={FONTE_TONE[e.fonte]}>{FONTE_LABEL[e.fonte]}</Badge></div>
@@ -1788,6 +1814,7 @@ function TradesScreen({ session }) {
               </div>
             </div>
           )}
+        <Pager info={pg} setPage={setPage} label="operações" />
       </Card>
     </div>
   );
@@ -1997,6 +2024,8 @@ function TurmaScreen({ session }) {
   const [includeCarteira, setIncludeCarteira] = useState(false);
   const [sortKey, setSortKey] = useState("somaR");
   const [aluno, setAluno] = useState(null);
+  const [atPage, setAtPage] = useState(1);
+  const [rkPage, setRkPage] = useState(1);
 
   useEffect(() => {
     (async () => {
@@ -2044,6 +2073,8 @@ function TurmaScreen({ session }) {
   const sorters = { somaR: r => r.stat.somaR, winRate: r => r.stat.winRate, sqn: r => r.stat.sqn, payoff: r => r.stat.payoff };
   const ranked = [...ativos].sort((a, b) => sorters[sortKey](b) - sorters[sortKey](a));
   const atencao = rows.filter(r => r.alerts.length).sort((a, b) => b.curDD - a.curDD);
+  const atPg = pageInfo(atencao, atPage, 5);
+  const rkPg = pageInfo(ranked, rkPage, 10);
 
   const chip = (active) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid " + (active ? T.lineGold : T.line), background: active ? T.goldSoft : "transparent", color: active ? T.gold : T.mut });
 
@@ -2083,7 +2114,7 @@ function TurmaScreen({ session }) {
         <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, fontSize: 15, fontWeight: 700, color: T.text }}>🚨 Painel de Atenção <span style={{ fontSize: 12, color: T.dim, fontWeight: 400 }}>· quem precisa de coaching</span></div>
         {atencao.length === 0
           ? <div style={{ padding: 22, textAlign: "center", fontSize: 14, color: T.green }}>Nenhum alerta no momento 🎉 a turma está saudável.</div>
-          : atencao.map(r => (
+          : atPg.slice.map(r => (
             <div key={r.st.user} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid " + T.line, flexWrap: "wrap" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{r.st.name} <span style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>· {r.st.user}</span></div>
@@ -2092,6 +2123,7 @@ function TurmaScreen({ session }) {
               <Button variant="ghost" size="sm" onClick={() => setAluno(r.st)}>Ver aluno →</Button>
             </div>
           ))}
+        <Pager info={atPg} setPage={setAtPage} label="alertas" />
       </Card>
 
       {/* Ranking */}
@@ -2108,12 +2140,12 @@ function TurmaScreen({ session }) {
             <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 70px 70px 80px 70px 70px 90px", gap: 8, padding: "9px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
               <div>#</div><div>ALUNO</div><div style={{ textAlign: "right" }}>OPS</div><div style={{ textAlign: "right" }}>ACERTO</div><div style={{ textAlign: "right" }}>R ACUM</div><div style={{ textAlign: "right" }}>SQN</div><div style={{ textAlign: "right" }}>PAYOFF</div><div></div>
             </div>
-            {ranked.map((r, i) => (
+            {rkPg.slice.map((r, i) => (
               <div key={r.st.user} onClick={() => setAluno(r.st)} role="button" tabIndex={0}
                 onKeyDown={e => { if (e.key === "Enter") setAluno(r.st); }}
                 style={{ display: "grid", gridTemplateColumns: "28px 1fr 70px 70px 80px 70px 70px 90px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono, cursor: "pointer" }}
                 className="fh-navitem">
-                <div style={{ fontSize: 13, color: i < 3 ? T.gold : T.dim, fontWeight: 700 }}>{i + 1}</div>
+                <div style={{ fontSize: 13, color: rkPg.from + i < 3 ? T.gold : T.dim, fontWeight: 700 }}>{rkPg.from + i + 1}</div>
                 <div style={{ fontFamily: T.sans }}>
                   <div style={{ fontSize: 14, color: T.text, fontWeight: 600 }}>{r.st.name}</div>
                   {r.alerts.length > 0 && <span style={{ fontSize: 11, color: T.red }}>⚠ {r.alerts.length} alerta{r.alerts.length > 1 ? "s" : ""}</span>}
@@ -2128,6 +2160,7 @@ function TurmaScreen({ session }) {
             ))}
           </div>
         </div>
+        <Pager info={rkPg} setPage={setRkPage} label="alunos" />
       </Card>
       </>}
     </div>
