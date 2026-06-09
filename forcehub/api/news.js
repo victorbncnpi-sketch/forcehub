@@ -14,6 +14,26 @@ const FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 const COUNTRIES = { USD: "EUA", BRL: "Brasil", EUR: "Zona do Euro", GBP: "Reino Unido", CNY: "China", JPY: "Japão", CAD: "Canadá", AUD: "Austrália" };
 const IMPACT = { High: 3, Medium: 2, Low: 1, Holiday: 1 };
 
+// FMP (Financial Modeling Prep): calendário com valor REALIZADO (actual).
+// Requer FMP_API_KEY (free tier). Usado como fonte primária dos eventos; o
+// ForexFactory entra como fallback se a chave faltar/falhar.
+const FMP_KEY = process.env.FMP_API_KEY;
+const FMP_COUNTRY = {
+  US: "EUA", USA: "EUA", "United States": "EUA",
+  BR: "Brasil", Brazil: "Brasil",
+  GB: "Reino Unido", UK: "Reino Unido", "United Kingdom": "Reino Unido",
+  CN: "China", China: "China",
+  JP: "Japão", Japan: "Japão",
+  CA: "Canadá", Canada: "Canadá",
+  AU: "Austrália", Australia: "Austrália",
+  EU: "Zona do Euro", EA: "Zona do Euro", "Euro Area": "Zona do Euro", "European Union": "Zona do Euro",
+  DE: "Zona do Euro", Germany: "Zona do Euro", FR: "Zona do Euro", France: "Zona do Euro",
+  IT: "Zona do Euro", Italy: "Zona do Euro", ES: "Zona do Euro", Spain: "Zona do Euro",
+  NL: "Zona do Euro", Netherlands: "Zona do Euro", PT: "Zona do Euro", Portugal: "Zona do Euro",
+  IE: "Zona do Euro", GR: "Zona do Euro", BE: "Zona do Euro", AT: "Zona do Euro", FI: "Zona do Euro",
+};
+const FMP_IMPACT = { High: 3, Medium: 2, Low: 1, None: 1, Holiday: 1 };
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
@@ -47,14 +67,14 @@ async function generate(today, todayBRT) {
   let events = [];
   let source = "forexfactory";
 
-  // Busca em paralelo: agenda (feed) + resumo (IA) + manchetes (RSS real).
+  // Busca em paralelo: agenda (FMP/feed) + resumo (IA) + manchetes (RSS real).
   const [evtRes, sumRes, headRes] = await Promise.allSettled([
-    fetchForexFactory(todayBRT),
+    fetchEvents(todayBRT),
     briefSummary(today),
     fetchRssHeadlines(),
   ]);
 
-  if (evtRes.status === "fulfilled") events = evtRes.value;
+  if (evtRes.status === "fulfilled") { events = evtRes.value.events; source = evtRes.value.source; }
   let summary = sumRes.status === "fulfilled" ? String(sumRes.value || "").trim() : "";
   let headlines = headRes.status === "fulfilled" ? headRes.value : [];
 
@@ -75,6 +95,50 @@ async function generate(today, todayBRT) {
     }
   }
   return { summary, events, headlines, source };
+}
+
+// Fonte dos eventos: FMP (com 'actual') quando há chave; senão ForexFactory.
+async function fetchEvents(todayBRT) {
+  if (FMP_KEY) {
+    try { const events = await fetchFMP(todayBRT); if (events.length) return { events, source: "fmp" }; } catch (_) {}
+  }
+  return { events: await fetchForexFactory(todayBRT), source: "forexfactory" };
+}
+
+// ─── FMP — Economic Calendar (inclui valor realizado) ────────────────────────
+async function fetchFMP(todayBRT) {
+  // BRT (UTC-3): o "hoje" local cobre as datas UTC de hoje e amanhã.
+  const tomorrow = new Date(new Date(todayBRT + "T12:00:00Z").getTime() + 864e5).toISOString().slice(0, 10);
+  const qs = `from=${todayBRT}&to=${tomorrow}&apikey=${FMP_KEY}`;
+  const urls = [
+    "https://financialmodelingprep.com/stable/economic-calendar?" + qs,
+    "https://financialmodelingprep.com/api/v3/economic_calendar?" + qs,
+  ];
+  let arr = null, lastErr;
+  for (const u of urls) {
+    try { const r = await fetch(u, { headers: { accept: "application/json" } }); if (!r.ok) { lastErr = new Error("FMP HTTP " + r.status); continue; } const j = await r.json(); if (Array.isArray(j)) { arr = j; break; } lastErr = new Error("FMP formato"); }
+    catch (e) { lastErr = e; }
+  }
+  if (!arr) throw lastErr || new Error("FMP indisponível");
+
+  const toBRTdate = (s) => { try { return new Date(String(s).replace(" ", "T") + "Z").toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); } catch (_) { return ""; } };
+  const toBRTtime = (s) => { try { return new Date(String(s).replace(" ", "T") + "Z").toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).slice(0, 5); } catch (_) { return ""; } };
+  const fmtVal = (v, unit) => (v == null || v === "") ? "" : String(v) + (unit ? String(unit) : "");
+
+  return arr
+    .filter(e => FMP_COUNTRY[e.country])
+    .filter(e => toBRTdate(e.date) === todayBRT)
+    .map(e => ({
+      time: toBRTtime(e.date),
+      country: FMP_COUNTRY[e.country],
+      title: String(e.event || ""),
+      impact: FMP_IMPACT[e.impact] || 1,
+      previous: fmtVal(e.previous, e.unit),
+      forecast: fmtVal(e.estimate, e.unit),
+      actual: fmtVal(e.actual, e.unit),
+    }))
+    .filter(e => e.title)
+    .sort((a, b) => a.time.localeCompare(b.time));
 }
 
 // ─── ForexFactory (feed gratuito, estruturado) ───────────────────────────────
