@@ -352,24 +352,46 @@ function Sparkline({ data, color, width = 48, height = 22 }) {
     </svg>
   );
 }
-function MarketBoard({ title, items, group }) {
+function FngBadge({ fng }) {
+  if (!fng || fng.value == null) return null;
+  const v = fng.value;
+  const c = v < 25 ? T.red : v < 45 ? "#e0982f" : v < 55 ? T.gold : v < 75 ? "#7bbf5a" : T.green;
+  const pt = { "Extreme Fear": "Medo Extremo", "Fear": "Medo", "Neutral": "Neutro", "Greed": "Ganância", "Extreme Greed": "Ganância Extrema" }[fng.label] || fng.label;
+  return (
+    <span title="Índice Medo & Ganância (cripto)" style={{ fontSize: 11, fontWeight: 700, color: c, display: "flex", alignItems: "center", gap: 5 }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: c, display: "inline-block" }} />{v} · {pt}
+    </span>
+  );
+}
+
+function MarketBoard({ title, items, group, favs, onToggleFav, reorderable, onReorder, headerExtra }) {
+  const dragSym = useRef(null);
   return (
     <Card style={{ overflow: "hidden" }}>
-      <div style={{ padding: "10px 14px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{title}</span>
-        <span style={{ fontSize: 11, color: T.dim }}>{items ? items.length : ""}</span>
+      <div style={{ padding: "10px 14px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.text, whiteSpace: "nowrap" }}>{title}</span>
+        {headerExtra || <span style={{ fontSize: 11, color: T.dim }}>{items ? items.length : ""}</span>}
       </div>
       {!items
         ? <div style={{ padding: 18, textAlign: "center" }}><Spinner size={16} /></div>
         : !items.length
-          ? <div style={{ padding: 18, textAlign: "center", fontSize: 12, color: T.dim }}>indisponível</div>
+          ? <div style={{ padding: 18, textAlign: "center", fontSize: 12, color: T.dim }}>{reorderable ? "Toque na ☆ de qualquer ativo para favoritar." : "indisponível"}</div>
           : items.map((it, i) => {
             const up = (it.changePct ?? 0) >= 0;
+            const g = it._group || group;
+            const fav = favs ? favs.has(it.symbol) : false;
+            const dragProps = reorderable ? {
+              draggable: true,
+              onDragStart: () => { dragSym.current = it.symbol; },
+              onDragOver: (e) => e.preventDefault(),
+              onDrop: () => { if (dragSym.current && dragSym.current !== it.symbol) onReorder(dragSym.current, it.symbol); dragSym.current = null; },
+            } : {};
             return (
-              <div key={it.symbol} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 48px auto 62px", gap: 8, alignItems: "center", padding: "7px 14px", borderBottom: i < items.length - 1 ? "1px solid " + T.line : "none" }}>
+              <div key={it.symbol} {...dragProps} style={{ display: "grid", gridTemplateColumns: "18px minmax(0,1fr) 46px auto 56px", gap: 7, alignItems: "center", padding: "7px 12px", borderBottom: i < items.length - 1 ? "1px solid " + T.line : "none", cursor: reorderable ? "grab" : "default" }}>
+                <span onClick={() => onToggleFav && onToggleFav(it.symbol)} title={fav ? "Remover dos favoritos" : "Favoritar"} style={{ cursor: "pointer", fontSize: 13, lineHeight: 1, color: fav ? T.gold : T.dim, userSelect: "none", textAlign: "center" }}>{fav ? "★" : "☆"}</span>
                 <span style={{ fontSize: 13, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
-                <Sparkline data={it.spark} color={it.changePct == null ? T.dim : up ? T.green : T.red} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: T.text, fontFamily: T.mono, textAlign: "right" }}>{fmtPrice(it.price, group)}</span>
+                <Sparkline data={it.spark} color={it.changePct == null ? T.dim : up ? T.green : T.red} width={46} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.text, fontFamily: T.mono, textAlign: "right" }}>{fmtPrice(it.price, g)}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, fontFamily: T.mono, color: it.changePct == null ? T.dim : up ? T.green : T.red, textAlign: "right" }}>
                   {it.changePct == null ? "—" : (up ? "▲" : "▼") + " " + (up ? "+" : "") + it.changePct.toFixed(2) + "%"}
                 </span>
@@ -435,6 +457,18 @@ function PanoramaScreen() {
   const [loadingMarket, setLoadingMarket] = useState(true);
   const [manualTickers, setManualTickers] = useState([]);
   const [mkt, setMkt] = useState(null);
+  const FAVS_KEY = "forcehub:mktFavs", SORT_KEY = "forcehub:mktSort";
+  const [favs, setFavs] = useState(() => { try { const v = JSON.parse(localStorage.getItem(FAVS_KEY)); return Array.isArray(v) ? v : []; } catch (e) { return []; } });
+  const [sort, setSort] = useState(() => { try { return localStorage.getItem(SORT_KEY) || "padrao"; } catch (e) { return "padrao"; } });
+  const persistFavs = (next) => { try { localStorage.setItem(FAVS_KEY, JSON.stringify(next)); } catch (e) {} return next; };
+  const toggleFav = (sym) => setFavs(prev => persistFavs(prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]));
+  const reorderFavs = (from, to) => setFavs(prev => { const a = [...prev]; const fi = a.indexOf(from), ti = a.indexOf(to); if (fi < 0 || ti < 0) return prev; a.splice(ti, 0, a.splice(fi, 1)[0]); return persistFavs(a); });
+  const changeSort = (s) => { setSort(s); try { localStorage.setItem(SORT_KEY, s); } catch (e) {} };
+  const favSet = new Set(favs);
+  const allItems = [];
+  if (mkt?.groups) for (const g of Object.keys(mkt.groups)) for (const it of (mkt.groups[g] || [])) allItems.push({ ...it, _group: g });
+  const favItems = favs.map(s => allItems.find(it => it.symbol === s)).filter(Boolean);
+  const srt = (arr) => { if (!arr || sort === "padrao") return arr; const k = (x) => x.changePct == null ? (sort === "altas" ? -1e9 : 1e9) : x.changePct; return [...arr].sort((a, b) => sort === "altas" ? k(b) - k(a) : k(a) - k(b)); };
 
   useEffect(() => {
     let active = true;
@@ -568,15 +602,23 @@ function PanoramaScreen() {
       {/* Mercado global: relógio de sessões + painéis de cotação */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Mercado global</div>
-        {mkt?.generatedAt && <span style={{ fontSize: 11, color: T.dim, fontFamily: T.mono }}>atualizado {fmtTime(mkt.generatedAt)}{mkt.stale ? " · offline" : ""}</span>}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", border: "1px solid " + T.line, borderRadius: 8, overflow: "hidden" }}>
+            {[["padrao", "Padrão"], ["altas", "Altas"], ["baixas", "Baixas"]].map(([k, l]) => (
+              <button key={k} onClick={() => changeSort(k)} style={{ padding: "5px 11px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer", background: sort === k ? T.goldSoft : "transparent", color: sort === k ? T.gold : T.mut }}>{l}</button>
+            ))}
+          </div>
+          {mkt?.generatedAt && <span style={{ fontSize: 11, color: T.dim, fontFamily: T.mono }}>atualizado {fmtTime(mkt.generatedAt)}{mkt.stale ? " · offline" : ""}</span>}
+        </div>
       </div>
       <MarketClock />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(285px, 1fr))", gap: 14 }}>
-        <MarketBoard title="Índices" items={mkt?.groups?.indices} group="indices" />
-        <MarketBoard title="Futuros" items={mkt?.groups?.futuros} group="indices" />
-        <MarketBoard title="Moedas" items={mkt?.groups?.moedas} group="moedas" />
-        <MarketBoard title="Commodities" items={mkt?.groups?.commodities} group="commodities" />
-        <MarketBoard title="Cripto" items={mkt?.groups?.cripto} group="cripto" />
+        {favItems.length > 0 && <MarketBoard title="⭐ Favoritos" items={favItems} favs={favSet} onToggleFav={toggleFav} reorderable onReorder={reorderFavs} />}
+        <MarketBoard title="Índices" items={srt(mkt?.groups?.indices)} group="indices" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Futuros" items={srt(mkt?.groups?.futuros)} group="indices" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Moedas" items={srt(mkt?.groups?.moedas)} group="moedas" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Commodities" items={srt(mkt?.groups?.commodities)} group="commodities" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} headerExtra={<FngBadge fng={mkt?.fng} />} />
       </div>
 
       {/* Indicadores (agenda) + Notícias em duas colunas */}

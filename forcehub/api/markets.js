@@ -87,6 +87,16 @@ async function fetchCrypto() {
   }).filter(Boolean);
 }
 
+// ─── Fear & Greed (cripto — alternative.me, sem chave) ───────────────────────
+async function fetchFng() {
+  const r = await fetch("https://api.alternative.me/fng/?limit=1", { headers: { accept: "application/json" } });
+  if (!r.ok) throw new Error("fng " + r.status);
+  const j = await r.json();
+  const d = j && j.data && j.data[0];
+  if (!d) throw new Error("fng vazio");
+  return { value: parseInt(d.value, 10), label: String(d.value_classification || "") };
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   const redis = getRedis();
@@ -103,12 +113,15 @@ export default async function handler(req, res) {
     const groups = {};
     const entries = await Promise.allSettled(Object.entries(GROUPS).map(async ([g, list]) => [g, await fetchGroup(list)]));
     for (const e of entries) if (e.status === "fulfilled") groups[e.value[0]] = e.value[1];
-    try { groups.cripto = await fetchCrypto(); } catch (_) { groups.cripto = []; }
+    let fng = null;
+    const [cryptoRes, fngRes] = await Promise.allSettled([fetchCrypto(), fetchFng()]);
+    groups.cripto = cryptoRes.status === "fulfilled" ? cryptoRes.value : [];
+    if (fngRes.status === "fulfilled") fng = fngRes.value;
 
     const total = Object.values(groups).reduce((s, arr) => s + arr.length, 0);
     if (!total) throw new Error("Nenhuma cotação disponível agora.");
 
-    const payload = { generatedAt: Date.now(), groups };
+    const payload = { generatedAt: Date.now(), groups, fng };
     if (redis) { try { await redis.set(KEY, payload, { ex: STALE_KEEP_S }); } catch (_) {} }
     return res.status(200).json({ ok: true, cached: false, ...payload });
   } catch (e) {
