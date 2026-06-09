@@ -329,6 +329,80 @@ function NewsPanel({ news, loading, error, refreshing, onRefresh }) {
   );
 }
 
+// ─── Mercado global: painéis de cotação + relógio de sessões ─────────────────
+const fmtPrice = (p, group) => {
+  if (p == null) return "—";
+  if (group === "moedas") return p >= 20 ? p.toFixed(2) : p.toFixed(4);
+  if (group === "cripto") return p >= 1000 ? p.toLocaleString("pt-BR", { maximumFractionDigits: 0 }) : p.toFixed(2);
+  if (p >= 1000) return p.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+  if (p >= 1) return p.toFixed(2);
+  return p.toFixed(4);
+};
+function MarketBoard({ title, items, group }) {
+  return (
+    <Card style={{ overflow: "hidden" }}>
+      <div style={{ padding: "10px 14px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{title}</span>
+        <span style={{ fontSize: 11, color: T.dim }}>{items ? items.length : ""}</span>
+      </div>
+      {!items
+        ? <div style={{ padding: 18, textAlign: "center" }}><Spinner size={16} /></div>
+        : !items.length
+          ? <div style={{ padding: 18, textAlign: "center", fontSize: 12, color: T.dim }}>indisponível</div>
+          : items.map((it, i) => {
+            const up = (it.changePct ?? 0) >= 0;
+            return (
+              <div key={it.symbol} style={{ display: "grid", gridTemplateColumns: "1fr auto 70px", gap: 8, alignItems: "center", padding: "8px 14px", borderBottom: i < items.length - 1 ? "1px solid " + T.line : "none" }}>
+                <span style={{ fontSize: 13, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.text, fontFamily: T.mono, textAlign: "right" }}>{fmtPrice(it.price, group)}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: T.mono, color: it.changePct == null ? T.dim : up ? T.green : T.red, textAlign: "right" }}>
+                  {it.changePct == null ? "—" : (up ? "▲" : "▼") + " " + (up ? "+" : "") + it.changePct.toFixed(2) + "%"}
+                </span>
+              </div>
+            );
+          })}
+    </Card>
+  );
+}
+
+const SESSIONS = [
+  { city: "São Paulo", flag: "🇧🇷", tz: "America/Sao_Paulo", o: [10, 0], c: [18, 0] },
+  { city: "Nova York", flag: "🇺🇸", tz: "America/New_York", o: [9, 30], c: [16, 0] },
+  { city: "Londres", flag: "🇬🇧", tz: "Europe/London", o: [8, 0], c: [16, 30] },
+  { city: "Tóquio", flag: "🇯🇵", tz: "Asia/Tokyo", o: [9, 0], c: [15, 0] },
+];
+function sessionInfo(s, now) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: s.tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const get = (t) => { const f = parts.find(x => x.type === t); return f ? f.value : ""; };
+  let hh = parseInt(get("hour"), 10); if (hh === 24) hh = 0;
+  const mm = parseInt(get("minute"), 10);
+  const weekend = get("weekday") === "Sat" || get("weekday") === "Sun";
+  const mins = hh * 60 + mm;
+  const isOpen = !weekend && mins >= s.o[0] * 60 + s.o[1] && mins < s.c[0] * 60 + s.c[1];
+  return { isOpen, time: String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0") };
+}
+function MarketClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(t); }, []);
+  return (
+    <Card style={{ padding: "10px 14px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+      <span style={{ fontSize: 12, color: T.dim, marginRight: 2 }}>🕐 Sessões</span>
+      {SESSIONS.map(s => {
+        const i = sessionInfo(s, now);
+        return (
+          <div key={s.city} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, border: "1px solid " + T.line, background: T.inset }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: i.isOpen ? T.green : T.dim, boxShadow: i.isOpen ? "0 0 6px " + T.green : "none", flexShrink: 0 }} />
+            <span style={{ fontSize: 13 }}>{s.flag}</span>
+            <span style={{ fontSize: 12, color: T.text }}>{s.city}</span>
+            <span style={{ fontSize: 12, color: T.mut, fontFamily: T.mono }}>{i.time}</span>
+            <span style={{ fontSize: 10, color: i.isOpen ? T.green : T.dim, fontWeight: 700, letterSpacing: 0.3 }}>{i.isOpen ? "ABERTO" : "fechado"}</span>
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
 // ─── Panorama de Mercado ────────────────────────────────────────────────────────
 function PanoramaScreen() {
   const TICKERS = ["WIN", "WDO", "IBOV"];
@@ -345,6 +419,15 @@ function PanoramaScreen() {
   const [marketLoaded, setMarketLoaded] = useState(false);
   const [loadingMarket, setLoadingMarket] = useState(true);
   const [manualTickers, setManualTickers] = useState([]);
+  const [mkt, setMkt] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => { try { const j = await api.get("/api/markets"); if (active && j && j.groups) setMkt(j); } catch (e) {} };
+    load();
+    const t = setInterval(load, 45000);
+    return () => { active = false; clearInterval(t); };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -465,6 +548,20 @@ function PanoramaScreen() {
             </Card>
           );
         })}
+      </div>
+
+      {/* Mercado global: relógio de sessões + painéis de cotação */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Mercado global</div>
+        {mkt?.generatedAt && <span style={{ fontSize: 11, color: T.dim, fontFamily: T.mono }}>atualizado {fmtTime(mkt.generatedAt)}{mkt.stale ? " · offline" : ""}</span>}
+      </div>
+      <MarketClock />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(265px, 1fr))", gap: 14 }}>
+        <MarketBoard title="Índices" items={mkt?.groups?.indices} group="indices" />
+        <MarketBoard title="Futuros" items={mkt?.groups?.futuros} group="indices" />
+        <MarketBoard title="Moedas" items={mkt?.groups?.moedas} group="moedas" />
+        <MarketBoard title="Commodities" items={mkt?.groups?.commodities} group="commodities" />
+        <MarketBoard title="Cripto" items={mkt?.groups?.cripto} group="cripto" />
       </div>
 
       {/* Indicadores (agenda) + Notícias em duas colunas */}
