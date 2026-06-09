@@ -44,23 +44,40 @@ function downsample(arr, n) {
 }
 
 // ─── Yahoo Finance (endpoint v8 chart — sem chave) ───────────────────────────
-async function fetchYahoo(symbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=5m&range=1d`;
+async function yahooChart(symbol, interval, range) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
   const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (FORCEHUB)", "accept": "application/json" } });
   if (!r.ok) throw new Error("yahoo " + r.status);
   const j = await r.json();
   const result = j && j.chart && j.chart.result && j.chart.result[0];
-  const m = result && result.meta;
-  if (!m || m.regularMarketPrice == null) throw new Error("sem dados");
-  const price = m.regularMarketPrice;
-  const prev = m.chartPreviousClose != null ? m.chartPreviousClose : (m.previousClose != null ? m.previousClose : price);
-  const closes = result.indicators && result.indicators.quote && result.indicators.quote[0] && result.indicators.quote[0].close;
+  if (!result) throw new Error("sem result");
+  const q = result.indicators && result.indicators.quote && result.indicators.quote[0];
+  return { meta: result.meta || null, closes: (q && q.close) || [] };
+}
+
+async function fetchYahoo(symbol) {
+  // 1) Intradiário (5 min). Funciona para a maioria dos ativos líquidos.
+  let meta = null, spark = [];
+  try { const d = await yahooChart(symbol, "5m", "1d"); meta = d.meta; spark = downsample(d.closes, 32); } catch (_) {}
+  // 2) Fallback diário p/ contratos finos (ex.: minério): sem preço ou sem série.
+  if (!meta || meta.regularMarketPrice == null || spark.length < 2) {
+    try {
+      const d2 = await yahooChart(symbol, "1d", "1mo");
+      if (!meta || meta.regularMarketPrice == null) meta = d2.meta;
+      if (spark.length < 2) spark = downsample(d2.closes, 32);
+    } catch (_) {}
+  }
+  if (!meta || meta.regularMarketPrice == null) throw new Error("sem dados");
+  const price = meta.regularMarketPrice;
+  // previousClose (fechamento da sessão anterior) é o correto p/ a variação do dia,
+  // inclusive quando a série usada é a diária (chartPreviousClose seria o início da janela).
+  const prev = meta.previousClose != null ? meta.previousClose : (meta.chartPreviousClose != null ? meta.chartPreviousClose : price);
   return {
     price,
     change: +(price - prev).toFixed(4),
     changePct: prev ? +(((price / prev) - 1) * 100).toFixed(2) : 0,
-    time: m.regularMarketTime ? m.regularMarketTime * 1000 : Date.now(),
-    spark: downsample(closes, 32),
+    time: meta.regularMarketTime ? meta.regularMarketTime * 1000 : Date.now(),
+    spark,
   };
 }
 
