@@ -61,12 +61,20 @@ async function fetchIbovBars(numDays) {
   return mapBars(findBarsArray(q.historicalDataPrice) || []);
 }
 
-// ── Brapi: futuros sandbox (sem token; só aceita o código do ativo) ──
+// ── Brapi: futuros (sandbox, sem token; aceita WIN e WDO) ──
+// O /historical exige o CONTRATO vigente (ex.: WINM26), não o código genérico.
+// Fluxo: term-structure (descobre o contrato) -> historical desse contrato.
 async function fetchFuture(asset) {
-  const r = await fetch(`${FUT}/historical?symbol=${asset}`);
-  if (!r.ok) throw new Error(`futuros ${asset} HTTP ${r.status}`);
+  const tsr = await fetch(`${FUT}/term-structure?asset=${asset}`, { headers: { "user-agent": UA } });
+  if (!tsr.ok) throw new Error(`futuros ${asset} term-structure HTTP ${tsr.status}`);
+  const ts = await tsr.json();
+  const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
+  const sym = (contracts.find(c => c && c.symbol) || {}).symbol; // contracts[0] = vencimento mais próximo
+  if (!sym) throw new Error(`futuros ${asset} sem contrato vigente`);
+  const r = await fetch(`${FUT}/historical?symbol=${encodeURIComponent(sym)}`, { headers: { "user-agent": UA } });
+  if (!r.ok) throw new Error(`futuros ${sym} HTTP ${r.status}`);
   const bars = findBarsArray(await r.json());
-  if (!bars || !bars.length) throw new Error(`futuros ${asset} sem barras`);
+  if (!bars || !bars.length) throw new Error(`futuros ${sym} sem barras`);
   return mapBars(bars);
 }
 
@@ -87,49 +95,43 @@ export default async function handler(req, res) {
 
   // Sondagem do sandbox de futuros (sem token): /api/market-data?probe=futures
   if (req.query.probe === "futures") {
+    const probeUrl = async (url) => { try { const r = await fetch(url, { headers: { "user-agent": UA } }); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch (_) {} return { status: r.status, json: j, sample: (j ? JSON.stringify(j) : t).slice(0, 700) }; } catch (e) { return { error: String((e && e.message) || e) }; } };
     const out = {};
     for (const asset of ["WIN", "WDO"]) {
       out[asset] = {};
-      const urls = [
-        ["term-structure", `${FUT}/term-structure?asset=${asset}`],
-        ["historical-asset", `${FUT}/historical?symbol=${asset}`],
-        ["quote", `${FUT}/quote?symbols=${asset}`],
-      ];
-      for (const [label, url] of urls) {
-        try {
-          const r = await fetch(url, { headers: { "user-agent": UA } });
-          const text = await r.text();
-          let j = null; try { j = JSON.parse(text); } catch (_) {}
-          out[asset][label] = { status: r.status, topKeys: j && typeof j === "object" ? Object.keys(j) : null, sample: (j ? JSON.stringify(j) : text).slice(0, 500) };
-        } catch (e) { out[asset][label] = { error: String((e && e.message) || e) }; }
-      }
+      const tsr = await probeUrl(`${FUT}/term-structure?asset=${asset}`);
+      const front = tsr.json && Array.isArray(tsr.json.contracts) && tsr.json.contracts[0] ? tsr.json.contracts[0].symbol : null;
+      out[asset]["term-structure"] = { status: tsr.status, sample: tsr.sample };
+      out[asset].front = front;
+      if (front) { const h = await probeUrl(`${FUT}/historical?symbol=${encodeURIComponent(front)}`); out[asset]["historical-front"] = { status: h.status, sample: h.sample }; }
     }
     return res.status(200).json({ ok: true, probe: out });
   }
 
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
   const data = { WIN: [], WDO: [], IBOV: [] };
+  const sources = {};
   const errors = [];
   const last = (arr) => arr.slice(-numDays);
 
   // IBOV primeiro (reutilizado como fallback de WIN).
   let ibovBars = [];
-  try { ibovBars = await fetchIbovBars(numDays); data.IBOV = last(ibovBars); }
+  try { ibovBars = await fetchIbovBars(numDays); data.IBOV = last(ibovBars); sources.IBOV = "brapi"; }
   catch (e) { errors.push({ ticker: "IBOV", error: e.message }); }
 
-  // WIN: futuros -> Ibovespa (proxy).
-  try { data.WIN = last(await fetchFuture("WIN")); }
+  // WIN: futuros (contrato vigente) -> Ibovespa (proxy).
+  try { data.WIN = last(await fetchFuture("WIN")); sources.WIN = "futures"; }
   catch (e1) {
-    if (ibovBars.length) { data.WIN = last(ibovBars); errors.push({ ticker: "WIN", error: "futuros indisponível; usando Ibovespa", fallback: "ibov" }); }
+    if (ibovBars.length) { data.WIN = last(ibovBars); sources.WIN = "ibov-proxy"; errors.push({ ticker: "WIN", error: "futuros indisponível; usando Ibovespa", fallback: "ibov" }); }
     else errors.push({ ticker: "WIN", error: e1.message });
   }
 
-  // WDO: futuros -> USD/BRL (Yahoo) x1000.
-  try { data.WDO = last(await fetchFuture("WDO")); }
+  // WDO: futuros (contrato vigente) -> USD/BRL (Yahoo) x1000.
+  try { data.WDO = last(await fetchFuture("WDO")); sources.WDO = "futures"; }
   catch (e1) {
-    try { data.WDO = last(await fetchYahoo("USDBRL=X", 1000)); errors.push({ ticker: "WDO", error: "futuros indisponível; usando USD/BRL", fallback: "usdbrl" }); }
+    try { data.WDO = last(await fetchYahoo("USDBRL=X", 1000)); sources.WDO = "usdbrl-proxy"; errors.push({ ticker: "WDO", error: "futuros indisponível; usando USD/BRL", fallback: "usdbrl" }); }
     catch (e2) { errors.push({ ticker: "WDO", error: e1.message + " | " + e2.message }); }
   }
 
-  return res.status(200).json({ ok: true, data, errors });
+  return res.status(200).json({ ok: true, data, sources, errors });
 }
