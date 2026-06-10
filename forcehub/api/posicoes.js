@@ -11,6 +11,7 @@
 //   Escrita: apenas as próprias posições.
 import { getRedis } from "./_redis";
 import { getSession, sessionCan } from "./_auth";
+import { runGatilho } from "./_gatilho";
 
 const keyFor = (u) => "forcehub:positions:" + u;
 
@@ -30,6 +31,9 @@ export default async function handler(req, res) {
       if (user !== sess.user && !isStaff) return res.status(403).json({ ok: false, error: "Acesso negado." });
       const data = await redis.get(keyFor(user));
       const posicoes = Array.isArray(data) ? data : (Array.isArray(data && data.posicoes) ? data.posicoes : []);
+      // Gatilho/expiração/fechamento automático, por usuário (trava de ~10min).
+      try { if (await runGatilho({ redis, items: posicoes, scope: "pos:" + user, kind: "pos" })) await redis.set(keyFor(user), posicoes); }
+      catch (e) { /* best-effort */ }
       return res.status(200).json({ ok: true, posicoes });
     }
 

@@ -748,6 +748,9 @@ const closePct = (p, saida) => { const r = ((saida - p.entrada) / p.entrada) * 1
 const liveResult = (item, price) => closePct(item, price); // % desde a entrada (direção-aware)
 const hitTarget = (item, price) => tradeDir(item) === "VENDA" ? price <= Number(item.alvo) : price >= Number(item.alvo);
 const hitStop = (item, price) => tradeDir(item) === "VENDA" ? price >= Number(item.stop) : price <= Number(item.stop);
+// Estado do gatilho: itens legados (sem o campo) contam como posicionados.
+const gatStatus = (x) => (x && x.gatilho && x.gatilho.status) || "POSICIONADA";
+const isAguardando = (x) => gatStatus(x) === "AGUARDANDO" && x.status !== "EXPIRADA";
 
 function LiveBar({ item, price }) {
   const s = Number(item.stop), e = Number(item.entrada), a = Number(item.alvo);
@@ -771,11 +774,42 @@ function LiveBar({ item, price }) {
 }
 
 function LivePanel({ item, cot }) {
+  const st = gatStatus(item);
+
+  // Entrada ainda não acionada: sem P&L e sem alvo/stop — só a distância até o gatilho.
+  if (st === "AGUARDANDO") {
+    const e = Number(item.entrada);
+    const price = cot && cot.price != null ? cot.price : null;
+    const dist = price != null && e ? ((price - e) / e) * 100 : null;
+    return (
+      <div style={{ padding: "0 16px 14px" }}>
+        <div style={{ background: T.inset, border: "1px dashed " + T.gold + "55", borderRadius: 10, padding: "11px 13px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13 }}>⏳</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: T.gold, letterSpacing: 0.4 }}>AGUARDANDO ENTRADA</span>
+              {price != null && <span style={{ fontSize: 14, fontWeight: 700, color: T.text, fontFamily: T.mono }}>R$ {price.toFixed(2)}</span>}
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, color: T.dim }}>ATÉ A ENTRADA</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{dist != null ? (dist >= 0 ? "+" : "") + dist.toFixed(2) + "%" : "—"}</div>
+            </div>
+          </div>
+          {price != null && <LiveBar item={item} price={price} />}
+          <div style={{ marginTop: 8, fontSize: 11, color: T.dim }}>
+            A operação só inicia quando o preço tocar R$ {e ? e.toFixed(2) : "—"} · validade {Math.min(Math.max(parseInt(item.validadeDias) || 3, 1), 30)} dia(s) útil(eis)
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!cot || cot.price == null) return null;
   const price = cot.price;
   const res = liveResult(item, price), up = res >= 0;
   const dayUp = (cot.changePct ?? 0) >= 0;
   const tgt = hitTarget(item, price), stp = hitStop(item, price);
+  const trigAt = item.gatilho && item.gatilho.triggeredAt && !item.gatilho.legacy ? new Date(item.gatilho.triggeredAt) : null;
   return (
     <div style={{ padding: "0 16px 14px" }}>
       <div style={{ background: T.inset, border: "1px solid " + (tgt ? T.green + "66" : stp ? T.red + "66" : T.line), borderRadius: 10, padding: "11px 13px" }}>
@@ -792,7 +826,10 @@ function LivePanel({ item, cot }) {
           </div>
         </div>
         <LiveBar item={item} price={price} />
-        {(tgt || stp) && <div style={{ marginTop: 9 }}><Badge tone={tgt ? "green" : "red"}>{tgt ? "🎯 Alvo atingido" : "🛑 Stop atingido"}</Badge></div>}
+        <div style={{ marginTop: 9, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {trigAt && <span style={{ fontSize: 11, color: T.dim }}>● posicionada em {trigAt.toLocaleDateString("pt-BR")}</span>}
+          {(tgt || stp) && <Badge tone={tgt ? "green" : "red"}>{tgt ? "🎯 Alvo atingido" : "🛑 Stop atingido"}</Badge>}
+        </div>
       </div>
     </div>
   );
@@ -800,7 +837,9 @@ function LivePanel({ item, cot }) {
 
 function PosicaoRow({ p, cot, onFechar, onRemove }) {
   const [saida, setSaida] = useState("");
-  const isAberta = p.status === "ABERTA";
+  const aguardando = isAguardando(p);
+  const expirada = p.status === "EXPIRADA";
+  const isAberta = p.status === "ABERTA" && !aguardando;
   const venda = tradeDir(p) === "VENDA";
   const live = isAberta && cot && cot.price != null ? closePct(p, cot.price) : null;
   const pctVal = p.precoSaida != null ? closePct(p, p.precoSaida) : (live != null ? live : null);
@@ -817,20 +856,27 @@ function PosicaoRow({ p, cot, onFechar, onRemove }) {
       <div style={{ fontSize: 13, color: T.text }}>R$ {p.entrada.toFixed(2)}</div>
       <div style={{ fontSize: 13, color: T.green }}>R$ {p.alvo.toFixed(2)}</div>
       <div style={{ fontSize: 13, color: T.red }}>R$ {p.stop.toFixed(2)}</div>
-      <div style={{ fontSize: 13, color: p.precoSaida ? T.gold : (live != null ? T.mut : T.dim), display: "flex", alignItems: "center", gap: 5 }}>
+      <div style={{ fontSize: 13, color: aguardando ? T.gold : p.precoSaida ? T.gold : (live != null ? T.mut : T.dim), display: "flex", alignItems: "center", gap: 5 }}>
         {live != null && <span title={cot.stale ? "último valor conhecido" : "ao vivo (delay ~15min)"} style={{ width: 6, height: 6, borderRadius: "50%", background: cot.stale ? T.dim : T.green, flexShrink: 0 }} />}
-        {p.precoSaida ? "R$ " + p.precoSaida.toFixed(2) : (live != null ? "R$ " + cot.price.toFixed(2) : "—")}
+        {aguardando ? "⏳" : p.precoSaida ? "R$ " + p.precoSaida.toFixed(2) : (live != null ? "R$ " + cot.price.toFixed(2) : "—")}
       </div>
       <div style={{ fontSize: 15, fontWeight: 700, color: pctColor }}>{pctVal == null ? "—" : (pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%"}</div>
       <div>
-        {isAberta ? (
+        {expirada ? (
+          <Badge tone="mut">✖ não acionada{p.expirouEm ? " · " + p.expirouEm : ""}</Badge>
+        ) : aguardando ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <Badge tone="gold">⏳ aguardando R$ {Number(p.entrada).toFixed(2)}</Badge>
+            {onRemove && <button className="fh-btn" onClick={() => onRemove(p.posId)} title="Descartar (não vou acompanhar)" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>}
+          </div>
+        ) : isAberta ? (
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <Input mono type="number" step="0.01" value={saida} onChange={e => setSaida(e.target.value)} placeholder="Saída R$" style={{ padding: "7px 9px", fontSize: 13 }} />
             <Button variant="danger" size="sm" onClick={() => { const v = parseFloat(saida); if (v) onFechar(p.posId, v); }}>Fechar</Button>
             {onRemove && <button className="fh-btn" onClick={() => onRemove(p.posId)} title="Descartar (não participei)" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>}
           </div>
         ) : (
-          <Badge tone="mut">✓ {p.dataSaida}</Badge>
+          <Badge tone="mut">{p.fechadoAuto ? (p.motivoFechamento === "alvo" ? "🎯 " : "🛑 ") : "✓ "}{p.dataSaida}</Badge>
         )}
       </div>
     </div>
@@ -987,7 +1033,8 @@ function CarteiraScreen({ canWrite }) {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState(null);
-  const [form, setForm] = useState({ ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
+  const FORM_VAZIO = { ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "", tipoEntrada: "gatilho", validade: "3" };
+  const [form, setForm] = useState(FORM_VAZIO);
   const [loadError, setLoadError] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [lightbox, setLightbox] = useState(null);
@@ -1058,11 +1105,19 @@ function CarteiraScreen({ canWrite }) {
     const e = parseFloat(form.entrada), a = parseFloat(form.alvo), s = parseFloat(form.stop);
     if (!form.ticker || !form.tickerOk || !e || !a || !s) return; // ticker precisa vir da lista da brapi
     const id = idRef.current++;
-    const nova = { id, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false, hasImage: !!form.imagem };
+    const agora = Date.now();
+    const nova = {
+      id, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s,
+      qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false, hasImage: !!form.imagem,
+      pubTs: agora, validadeDias: Math.min(Math.max(parseInt(form.validade) || 3, 1), 30),
+      gatilho: form.tipoEntrada === "mercado"
+        ? { status: "POSICIONADA", triggeredAt: agora, mercado: true } // já posicionada (entrada a mercado)
+        : { status: "AGUARDANDO", lastPrice: null },                   // inicia só quando o preço tocar a entrada
+    };
     if (form.imagem) { try { await api.post("/api/carteira?img=" + id, { data: form.imagem }); } catch (err) { nova.hasImage = false; setLoadError("Falha ao salvar a imagem: " + err.message); } }
     const next = [...acoes, nova];
     setAcoes(next); saveRecs(next);
-    setForm({ ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
+    setForm(FORM_VAZIO);
     setShowForm(false);
   };
   const removeAcao = (id) => {
@@ -1072,13 +1127,24 @@ function CarteiraScreen({ canWrite }) {
     if (alvo && alvo.hasImage) { api.post("/api/carteira?img=" + id, { data: null }).catch(() => {}); }
   };
   const addFromScan = (op) => {
-    const nova = { id: idRef.current++, ticker: op.ticker, nome: op.nome, direcao: tradeDir(op), entrada: op.entrada, alvo: op.alvo, stop: op.stop, qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true };
+    const nova = {
+      id: idRef.current++, ticker: op.ticker, nome: op.nome, direcao: tradeDir(op), entrada: op.entrada, alvo: op.alvo, stop: op.stop,
+      qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true,
+      pubTs: Date.now(), validadeDias: 3, gatilho: { status: "AGUARDANDO", lastPrice: null },
+    };
     const nextAcoes = [...acoes, nova];
     setAcoes(nextAcoes); saveRecs(nextAcoes);
   };
   // Cliente "aceita" uma recomendação -> abre uma posição na carteira dele.
+  // A posição herda o estado do gatilho da call (o acionamento é da CALL, não
+  // do momento do aceite): call já posicionada -> posição nasce posicionada.
   const aceitar = (a) => {
-    const nova = { posId: idRef.current++, recId: a.id, ticker: a.ticker, nome: a.nome, direcao: tradeDir(a), entrada: a.entrada, alvo: a.alvo, stop: a.stop, qty: a.qty || 1, ai: !!a.ai, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null };
+    const nova = {
+      posId: idRef.current++, recId: a.id, ticker: a.ticker, nome: a.nome, direcao: tradeDir(a), entrada: a.entrada, alvo: a.alvo, stop: a.stop,
+      qty: a.qty || 1, ai: !!a.ai, status: "ABERTA", dataEntrada: new Date().toLocaleDateString("pt-BR"), resultado: null, precoSaida: null,
+      pubTs: a.pubTs, validadeDias: a.validadeDias,
+      gatilho: a.gatilho ? JSON.parse(JSON.stringify(a.gatilho)) : undefined,
+    };
     const nextPos = [...posicoes, nova];
     setPosicoes(nextPos); savePos(nextPos);
     setAba("posicoes");
@@ -1118,14 +1184,16 @@ function CarteiraScreen({ canWrite }) {
   };
   const rrColor = (r) => r >= 3 ? T.green : r >= 2 ? "#86efac" : r >= 1 ? T.gold : T.red;
   const abertas = posicoes.filter(p => p.status === "ABERTA").length;
+  const aguardandoPos = posicoes.filter(p => p.status === "ABERTA" && isAguardando(p)).length;
   const fechadas = posicoes.filter(p => p.resultado != null);
   const acumulado = fechadas.reduce((s, p) => s + p.resultado, 0);
   const resultadoTotal = fechadas.length ? (acumulado / fechadas.length) : 0;
   // Abertas primeiro, depois as fechadas pelas mais recentes — e paginado.
   const posOrdenadas = [...posicoes].sort((a, b) => (a.status === "ABERTA" ? 0 : 1) - (b.status === "ABERTA" ? 0 : 1));
   const posPg = pageInfo(posOrdenadas, posPage, 8);
-  const recsAtivas = acoes.filter(a => a.status !== "ENCERRADA");
+  const recsAtivas = acoes.filter(a => a.status !== "ENCERRADA" && a.status !== "EXPIRADA");
   const recsEncerradas = acoes.filter(a => a.status === "ENCERRADA");
+  const recsExpiradas = acoes.filter(a => a.status === "EXPIRADA");
 
   const tabLabel = (icon, text) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name={icon} size={15} /> {text}</span>;
   // Recomendações são visíveis a quem tem leitura (cap "carteira"); os controles
@@ -1252,7 +1320,7 @@ function CarteiraScreen({ canWrite }) {
                     <div style={{ padding: "0 16px 14px" }}>
                       {minhaPos
                         ? <Button variant="ghost" size="sm" disabled style={{ width: "100%" }}>{minhaPos.status === "ABERTA" ? "✓ Você está acompanhando" : "✓ Você acompanhou (encerrada)"}</Button>
-                        : <Button variant="success" size="sm" onClick={() => aceitar(a)} style={{ width: "100%" }}>+ Aceitar e acompanhar</Button>}
+                        : <Button variant="success" size="sm" onClick={() => aceitar(a)} style={{ width: "100%" }}>{isAguardando(a) ? "+ Acompanhar (entra no gatilho)" : "+ Aceitar e acompanhar"}</Button>}
                     </div>
                     {canWrite && <EncerrarRec onConfirm={(price) => encerrarRec(a.id, price)} />}
                     {a.hasImage && <RecImage id={a.id} onOpen={setLightbox} />}
@@ -1268,7 +1336,8 @@ function CarteiraScreen({ canWrite }) {
       {loaded && aba === "posicoes" && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
-            <Stat label="Abertas" value={abertas} tone="gold" />
+            <Stat label="Abertas" value={abertas - aguardandoPos} tone="gold" />
+            <Stat label="Aguardando" value={aguardandoPos} tone="mut" />
             <Stat label="Fechadas" value={posicoes.filter(p => p.status === "FECHADA").length} tone="mut" />
             <Stat label="Rent. média" value={(resultadoTotal >= 0 ? "+" : "") + resultadoTotal.toFixed(2) + "%"} tone={resultadoTotal >= 0 ? "green" : "red"} />
             <Stat label="Acumulado" value={(acumulado >= 0 ? "+" : "") + acumulado.toFixed(2) + "%"} tone={acumulado >= 0 ? "green" : "red"} />
@@ -1309,6 +1378,7 @@ function CarteiraScreen({ canWrite }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
               <Stat label="Calls encerradas" value={recsEncerradas.length} tone="blue" />
               <Stat label="Ativas" value={recsAtivas.length} tone="gold" />
+              <Stat label="Não acionadas" value={recsExpiradas.length} tone="mut" />
               <Stat label="Assertividade" value={recsEncerradas.length ? acc.toFixed(0) + "%" : "—"} tone={acc >= 50 ? "green" : "red"} />
               <Stat label="Acumulado" value={(acum >= 0 ? "+" : "") + acum.toFixed(2) + "%"} tone={acum >= 0 ? "green" : "red"} />
             </div>
@@ -1327,7 +1397,9 @@ function CarteiraScreen({ canWrite }) {
                       const rr = Math.abs((a.alvo - a.entrada) / (a.entrada - a.stop));
                       return (
                         <div key={a.id} style={{ display: "grid", gridTemplateColumns: "90px 96px 1fr 100px 90px 110px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: T.gold }}>{a.ticker}</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: T.gold }} title={a.fechadoAuto ? ("Fechada automaticamente no " + (a.motivoFechamento === "alvo" ? "alvo" : "stop") + (a.fechamentoAmbiguo ? " (alvo e stop no mesmo dia — assumido stop)" : "")) : undefined}>
+                            {a.ticker}{a.fechadoAuto ? (a.motivoFechamento === "alvo" ? " 🎯" : " 🛑") : ""}
+                          </div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: venda ? T.red : T.green }}>{venda ? "▼ VENDA" : "▲ COMPRA"}</div>
                           <div style={{ fontSize: 13, color: T.mut }}>R$ {a.entrada.toFixed(2)} → R$ {a.precoSaida != null ? a.precoSaida.toFixed(2) : "—"}</div>
                           <div style={{ fontSize: 15, fontWeight: 700, color: a.resultado >= 0 ? T.green : T.red }}>{(a.resultado >= 0 ? "+" : "") + a.resultado.toFixed(2)}%</div>
@@ -1361,6 +1433,20 @@ function CarteiraScreen({ canWrite }) {
                   const on = form.direcao === v;
                   return <button key={v} className="fh-btn" onClick={() => setF("direcao", v)} style={{ flex: 1, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? c + "88" : T.line), background: on ? c + "1a" : "transparent", color: on ? c : T.mut }}>{l}</button>;
                 })}
+              </div>
+            </Field>
+            <Field label="Acionamento da entrada" hint="Gatilho: a operação só inicia (e o alvo/stop só valem) quando o preço tocar a entrada. A mercado: já posicionada agora.">
+              <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
+                {[["gatilho", "⏳ Aguardar gatilho"], ["mercado", "⚡ Já posicionada (a mercado)"]].map(([v, l]) => {
+                  const on = form.tipoEntrada === v;
+                  return <button key={v} className="fh-btn" onClick={() => setF("tipoEntrada", v)} style={{ flex: 1, minWidth: 160, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? T.gold + "88" : T.line), background: on ? T.goldSoft : "transparent", color: on ? T.gold : T.mut }}>{l}</button>;
+                })}
+                {form.tipoEntrada === "gatilho" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <Input mono type="number" min="1" max="30" value={form.validade} onChange={e => setF("validade", e.target.value)} style={{ width: 64, textAlign: "center" }} />
+                    <span style={{ fontSize: 12, color: T.dim, whiteSpace: "nowrap" }}>dia(s) útil(eis) p/ acionar</span>
+                  </div>
+                )}
               </div>
             </Field>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>

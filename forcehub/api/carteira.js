@@ -10,6 +10,7 @@
 // Acesso: GET exige a permissão "carteira"; POST exige "carteira_write".
 import { getRedis } from "./_redis";
 import { getSession, sessionCan } from "./_auth";
+import { runGatilho } from "./_gatilho";
 
 const KEY = "forcehub:carteira";
 const imgKey = (id) => "forcehub:carteira:img:" + String(id).replace(/[^\w.-]/g, "");
@@ -50,9 +51,13 @@ export default async function handler(req, res) {
     if (req.method === "GET") {
       if (!sessionCan(sess, "carteira")) return res.status(403).json({ ok: false, error: "Sem acesso à carteira." });
       const data = (await redis.get(KEY)) || {};
+      const recomendacoes = Array.isArray(data.recomendacoes) ? data.recomendacoes : [];
+      // Gatilho/expiração/fechamento automático (server-side, trava de ~10min).
+      try { if (await runGatilho({ redis, items: recomendacoes, scope: "carteira", kind: "rec" })) await redis.set(KEY, { ...data, recomendacoes }); }
+      catch (e) { /* detecção é best-effort; nunca derruba a leitura */ }
       return res.status(200).json({
         ok: true,
-        recomendacoes: Array.isArray(data.recomendacoes) ? data.recomendacoes : [],
+        recomendacoes,
         posicoes: Array.isArray(data.posicoes) ? data.posicoes : [],
       });
     }
