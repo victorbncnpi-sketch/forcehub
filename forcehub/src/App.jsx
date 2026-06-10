@@ -429,7 +429,109 @@ function MarketClock() {
 }
 
 // ─── Panorama de Mercado ────────────────────────────────────────────────────────
-function PanoramaScreen() {
+// Renderiza a análise técnica (seções em maiúsculas + bullets) de forma legível.
+function renderAnalise(text) {
+  const lines = String(text || "").split("\n").map(l => l.trim()).filter(Boolean);
+  return lines.map((l, i) => {
+    const head = /^([A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{2,}):\s*(.*)$/.exec(l);
+    if (head && head[1] === head[1].toUpperCase()) {
+      return <div key={i} style={{ fontSize: 12, fontWeight: 800, color: T.gold, letterSpacing: 0.5, marginTop: i ? 13 : 0, marginBottom: 3 }}>{head[1]}{head[2] ? <span style={{ color: T.text, fontWeight: 600, letterSpacing: 0 }}>: {head[2]}</span> : ""}</div>;
+    }
+    if (/^[-•]\s+/.test(l)) return <div key={i} style={{ fontSize: 13, color: T.text, lineHeight: 1.55, paddingLeft: 15, position: "relative" }}><span style={{ position: "absolute", left: 0, color: T.gold }}>›</span>{l.replace(/^[-•]\s+/, "")}</div>;
+    if (/não é recomenda/i.test(l)) return <div key={i} style={{ fontSize: 11, color: T.dim, fontStyle: "italic", marginTop: 11, borderTop: "1px solid " + T.line, paddingTop: 9 }}>{l}</div>;
+    return <div key={i} style={{ fontSize: 13, color: T.mut, lineHeight: 1.55 }}>{l}</div>;
+  });
+}
+
+// Modal de análise técnica por IA de um ativo do Panorama (WIN/WDO/IBOV).
+// Visualização para todos; geração (print + observações -> IA) só para staff.
+function AnaliseModal({ ativo, label, data, canWrite, onClose, onSaved }) {
+  const [mode, setMode] = useState(data ? "view" : (canWrite ? "form" : "view"));
+  const [img, setImg] = useState(null);
+  const [imgLoading, setImgLoading] = useState(false);
+  const [texto, setTexto] = useState("");
+  const [formImg, setFormImg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [imgBusy, setImgBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    let on = true;
+    if (data && data.hasImage) {
+      setImgLoading(true);
+      (async () => { try { const j = await api.get("/api/analise?img=" + ativo); if (on) setImg(j.image || null); } catch (e) {} finally { if (on) setImgLoading(false); } })();
+    } else setImg(null);
+    return () => { on = false; };
+  }, [ativo, data]);
+
+  const pickImg = async (file) => {
+    if (!file) return;
+    setImgBusy(true);
+    try { const d = await resizeImage(file); setFormImg(d); } catch (e) {}
+    finally { setImgBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+  const gerar = async () => {
+    setBusy(true); setError(null);
+    try {
+      const j = await api.post("/api/analise", { ativo, texto, imagem: formImg || null });
+      if (j.ok === false) throw new Error(j.error || "Falha ao gerar análise.");
+      onSaved(j.analise);
+      setImg(formImg || null);
+      setTexto(""); setFormImg(""); setMode("view");
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title={"Análise técnica — " + label} onClose={onClose} width={680}>
+      {mode === "view" ? (
+        data ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {data.hasImage && (imgLoading ? <div style={{ padding: 16, textAlign: "center" }}><Spinner /></div> : img && (
+              <img src={img} alt="Gráfico analisado" style={{ width: "100%", maxHeight: 320, objectFit: "contain", borderRadius: 8, border: "1px solid " + T.line, background: "#000" }} />
+            ))}
+            {data.texto && <div style={{ fontSize: 12, color: T.mut, fontStyle: "italic", borderLeft: "2px solid " + T.line, paddingLeft: 10 }}>“{data.texto}”</div>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{renderAnalise(data.analise)}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, borderTop: "1px solid " + T.line, paddingTop: 11 }}>
+              <span style={{ fontSize: 11, color: T.dim }}>Gerado por {data.autor || "—"}{data.generatedAt ? " · " + new Date(data.generatedAt).toLocaleString("pt-BR") : ""}</span>
+              {canWrite && <Button size="sm" onClick={() => setMode("form")}>✏️ Gerar nova</Button>}
+            </div>
+          </div>
+        ) : (
+          <EmptyState icon={<Icon name="panorama" size={38} color={T.dim} />} title="Sem análise publicada" desc={canWrite ? "Envie um print do gráfico e observações para a IA gerar a análise técnica." : "O analista ainda não publicou a análise técnica deste ativo."}>
+            {canWrite && <Button onClick={() => setMode("form")}>Gerar análise</Button>}
+          </EmptyState>
+        )
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {error && <Banner tone="red">{error}</Banner>}
+          <Field label="Print do gráfico" hint="Anexe a screenshot do gráfico (a IA lê os níveis a partir dela).">
+            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: "none" }} onChange={e => pickImg(e.target.files && e.target.files[0])} />
+            {formImg ? (
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                <img src={formImg} alt="Prévia" style={{ maxWidth: 260, maxHeight: 160, borderRadius: 8, border: "1px solid " + T.line }} />
+                <Button variant="ghost" size="sm" onClick={() => setFormImg("")}>Remover</Button>
+              </div>
+            ) : (
+              <Button variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={imgBusy}><Icon name="attach" size={16} /> {imgBusy ? "Processando..." : "Anexar print"}</Button>
+            )}
+          </Field>
+          <Field label="Observações para a IA" hint="Ex.: contexto, viés, região de interesse, notícias relevantes.">
+            <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={4} placeholder="Ex.: Índice testando a LTB dos 170k; observar rompimento com volume..."
+              style={{ width: "100%", resize: "vertical", background: T.inset, border: "1px solid " + T.line, borderRadius: 8, color: T.text, padding: "10px 12px", fontSize: 13, fontFamily: T.sans, lineHeight: 1.5, boxSizing: "border-box" }} />
+          </Field>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <Button variant="ghost" onClick={() => data ? setMode("view") : onClose()}>Cancelar</Button>
+            <Button onClick={gerar} disabled={busy || imgBusy || (!texto.trim() && !formImg)}>{busy ? "⟳ Gerando..." : "✨ Gerar com IA"}</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function PanoramaScreen({ session }) {
   const TICKERS = ["WIN", "WDO", "IBOV"];
   const LABELS = { WIN: "Mini Índice", WDO: "Mini Dólar", IBOV: "Ibovespa" };
   const toISO = (d) => { const x = new Date(d); x.setHours(12, 0, 0, 0); return x.toISOString().split("T")[0]; };
@@ -445,6 +547,11 @@ function PanoramaScreen() {
   const [loadingMarket, setLoadingMarket] = useState(true);
   const [manualTickers, setManualTickers] = useState([]);
   const [mkt, setMkt] = useState(null);
+  const canWriteAnalise = !!session && (session.role === "superadmin" || session.role === "moderator");
+  const [analises, setAnalises] = useState({});
+  const [analiseAtivo, setAnaliseAtivo] = useState(null); // ativo cujo modal está aberto
+  const loadAnalises = async () => { try { const j = await api.get("/api/analise"); if (j && j.analises) setAnalises(j.analises); } catch (e) {} };
+  useEffect(() => { loadAnalises(); }, []);
   const FAVS_KEY = "forcehub:mktFavs", SORT_KEY = "forcehub:mktSort";
   const [favs, setFavs] = useState(() => { try { const v = JSON.parse(localStorage.getItem(FAVS_KEY)); return Array.isArray(v) ? v : []; } catch (e) { return []; } });
   const [sort, setSort] = useState(() => { try { return localStorage.getItem(SORT_KEY) || "padrao"; } catch (e) { return "padrao"; } });
@@ -582,10 +689,21 @@ function PanoramaScreen() {
                   </div>
                 );
               })}
+              <button className="fh-btn" onClick={() => setAnaliseAtivo(ticker)}
+                style={{ width: "100%", border: "none", borderTop: "1px solid " + T.line, background: T.panel2, color: analises[ticker] ? T.text : T.mut, padding: "9px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: analises[ticker] ? T.green : T.dim, boxShadow: analises[ticker] ? "0 0 6px " + T.green : "none" }} />
+                📊 Análise técnica IA{analises[ticker] ? "" : (canWriteAnalise ? " — gerar" : " · em breve")}
+              </button>
             </Card>
           );
         })}
       </div>
+
+      {analiseAtivo && (
+        <AnaliseModal ativo={analiseAtivo} label={LABELS[analiseAtivo]} data={analises[analiseAtivo]}
+          canWrite={canWriteAnalise} onClose={() => setAnaliseAtivo(null)}
+          onSaved={(a) => { setAnalises(prev => ({ ...prev, [analiseAtivo]: a })); }} />
+      )}
 
       {/* Mercado global: relógio de sessões + painéis de cotação */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
@@ -2487,7 +2605,7 @@ export default function App() {
     <>
       <GlobalStyle />
       <Shell session={session} active={current} onNavigate={setActive} onLogout={logout}>
-        {current === "panorama" && <PanoramaScreen />}
+        {current === "panorama" && <PanoramaScreen session={session} />}
         {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} />}
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
         {current === "trades" && <TradesScreen session={session} />}
