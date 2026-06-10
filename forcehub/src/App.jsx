@@ -815,6 +815,51 @@ function EquityCurve({ positions, title = "Curva de capital", noun = "trade", em
 }
 
 // ─── Carteira Recomendada ─────────────────────────────────────────────────────
+// Autocomplete de ticker com a lista oficial da brapi: o usuário é obrigado a
+// selecionar um ativo existente (evita tickers inexistentes/errados).
+function TickerSelect({ value, ok, onText, onPick }) {
+  const [sugs, setSugs] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const tRef = useRef(null);
+  const buscar = (txt) => {
+    if (tRef.current) clearTimeout(tRef.current);
+    if (!txt || txt.length < 2) { setSugs([]); setOpen(false); return; }
+    tRef.current = setTimeout(async () => {
+      setBusy(true);
+      try { const j = await api.get("/api/tickers?q=" + encodeURIComponent(txt)); setSugs(j.results || []); setOpen(true); }
+      catch (e) { setSugs([]); }
+      finally { setBusy(false); }
+    }, 350);
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <Input mono value={value}
+        onChange={e => { const v = e.target.value.toUpperCase(); onText(v); buscar(v); }}
+        onFocus={() => sugs.length > 0 && setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 180)}
+        placeholder="PETR4"
+        style={{ borderColor: value ? (ok ? T.green + "66" : T.gold + "66") : undefined }} />
+      {busy && <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)" }}><Spinner size={13} /></span>}
+      {open && sugs.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 40, marginTop: 4, background: T.panel2, border: "1px solid " + T.line, borderRadius: 8, maxHeight: 220, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.45)" }}>
+          {sugs.map(s => (
+            <div key={s.ticker} onMouseDown={() => { onPick(s); setOpen(false); }}
+              style={{ padding: "8px 11px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid " + T.line }}>
+              <span style={{ fontFamily: T.mono, fontWeight: 700, color: T.gold, fontSize: 13, flexShrink: 0 }}>{s.ticker}</span>
+              <span style={{ fontSize: 12, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{s.nome}</span>
+              {s.preco != null && <span style={{ fontFamily: T.mono, fontSize: 12, color: T.text, flexShrink: 0 }}>R$ {s.preco.toFixed(2)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && !busy && sugs.length === 0 && value.length >= 2 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 40, marginTop: 4, background: T.panel2, border: "1px solid " + T.line, borderRadius: 8, padding: "9px 11px", fontSize: 12, color: T.dim }}>Nenhum ativo encontrado.</div>
+      )}
+    </div>
+  );
+}
+
 function CarteiraScreen({ canWrite }) {
   const [acoes, setAcoes] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
@@ -824,7 +869,7 @@ function CarteiraScreen({ canWrite }) {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState(null);
-  const [form, setForm] = useState({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
+  const [form, setForm] = useState({ ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
   const [loadError, setLoadError] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [lightbox, setLightbox] = useState(null);
@@ -872,7 +917,7 @@ function CarteiraScreen({ canWrite }) {
       catch (e) { /* mantém o último valor */ }
     };
     load();
-    const t = setInterval(load, 60000);
+    const t = setInterval(load, 600000); // 10 min (cadência da fonte; delay ~15 min)
     return () => { active = false; clearInterval(t); };
   }, [acoes, posicoes]);
 
@@ -893,13 +938,13 @@ function CarteiraScreen({ canWrite }) {
   };
   const addAcao = async () => {
     const e = parseFloat(form.entrada), a = parseFloat(form.alvo), s = parseFloat(form.stop);
-    if (!form.ticker || !e || !a || !s) return;
+    if (!form.ticker || !form.tickerOk || !e || !a || !s) return; // ticker precisa vir da lista da brapi
     const id = idRef.current++;
     const nova = { id, ticker: form.ticker.toUpperCase(), nome: form.nome, direcao: form.direcao, entrada: e, alvo: a, stop: s, qty: parseInt(form.qty) || 1, obs: form.obs, addedAt: new Date().toLocaleDateString("pt-BR"), ai: false, hasImage: !!form.imagem };
     if (form.imagem) { try { await api.post("/api/carteira?img=" + id, { data: form.imagem }); } catch (err) { nova.hasImage = false; setLoadError("Falha ao salvar a imagem: " + err.message); } }
     const next = [...acoes, nova];
     setAcoes(next); saveRecs(next);
-    setForm({ ticker: "", nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
+    setForm({ ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "" });
     setShowForm(false);
   };
   const removeAcao = (id) => {
@@ -1115,7 +1160,7 @@ function CarteiraScreen({ canWrite }) {
           <EquityCurve positions={posicoes} />
           {abertas > 0 && Object.keys(cotacoes).length > 0 && (
             <div style={{ fontSize: 11, color: T.dim, display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> Preços ao vivo · delay ~15min{cotAt ? " · atualizado " + fmtTime(cotAt) : ""} — colunas SAÍDA/RENT.% marcam a mercado as posições abertas.
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> Preços via brapi · atualiza a cada 10 min (delay ~15 min){cotAt ? " · atualizado " + fmtTime(cotAt) : ""} — colunas SAÍDA/RENT.% marcam a mercado as posições abertas.
             </div>
           )}
           {posicoes.length === 0 ? (
@@ -1185,7 +1230,11 @@ function CarteiraScreen({ canWrite }) {
         <Modal title="Nova ação recomendada" onClose={() => setShowForm(false)}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
-              <Field label="Ticker"><Input mono value={form.ticker} onChange={e => setF("ticker", e.target.value.toUpperCase())} placeholder="PETR4" /></Field>
+              <Field label="Ticker" hint={form.ticker ? (form.tickerOk ? "✓ Ativo válido da B3" : "Selecione o ativo na lista") : "Digite 2+ letras e escolha na lista"}>
+                <TickerSelect value={form.ticker} ok={form.tickerOk}
+                  onText={(v) => setForm(p => ({ ...p, ticker: v, tickerOk: false }))}
+                  onPick={(s) => setForm(p => ({ ...p, ticker: s.ticker, tickerOk: true, nome: p.nome || s.nome }))} />
+              </Field>
               <Field label="Empresa"><Input value={form.nome} onChange={e => setF("nome", e.target.value)} placeholder="Petrobras PN" /></Field>
             </div>
             <Field label="Direção" hint="Compra: alvo acima da entrada · Venda: alvo abaixo da entrada.">
@@ -1227,7 +1276,7 @@ function CarteiraScreen({ canWrite }) {
             )}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <Button variant="ghost" onClick={() => setShowForm(false)}>Cancelar</Button>
-              <Button onClick={addAcao}>Adicionar →</Button>
+              <Button onClick={addAcao} disabled={!form.tickerOk}>Adicionar →</Button>
             </div>
           </div>
         </Modal>

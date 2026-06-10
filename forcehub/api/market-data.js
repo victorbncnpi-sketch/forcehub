@@ -73,17 +73,21 @@ async function fetchIbovBars(numDays) {
   return mapBars(findBarsArray(q.historicalDataPrice) || []);
 }
 
-// ── Brapi: futuros (sandbox, sem token; aceita WIN e WDO) ──
+// ── Brapi: futuros (token PRO; sandbox sem token cobre só WIN/WDO) ──
 // O /historical exige o CONTRATO vigente (ex.: WINM26), não o código genérico.
 // Fluxo: term-structure (descobre o contrato) -> historical desse contrato.
 async function fetchFuture(asset) {
-  const ts = await getJson(`${FUT}/term-structure?asset=${asset}`);
+  const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+  const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
   const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
-  const sym = (contracts.find(c => c && c.symbol) || {}).symbol; // contracts[0] = vencimento mais próximo
-  if (!sym) throw new Error(`futuros ${asset} sem contrato vigente`);
-  const bars = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(sym)}`)); // série em future.history[]
-  if (!bars || !bars.length) throw new Error(`futuros ${sym} sem barras`);
-  return mapBars(bars);
+  // Vigente = vencimento mais próximo AINDA NÃO vencido (na virada de contrato,
+  // contracts[0] pode ser o que vence hoje/já venceu).
+  const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const front = contracts.find(c => c && c.symbol && (!c.expirationDate || c.expirationDate >= todayBRT)) || contracts.find(c => c && c.symbol);
+  if (!front) throw new Error(`futuros ${asset} sem contrato vigente`);
+  const bars = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)); // série em future.history[]
+  if (!bars || !bars.length) throw new Error(`futuros ${front.symbol} sem barras`);
+  return { bars: mapBars(bars), symbol: front.symbol };
 }
 
 // ── Yahoo Finance: chart diário (sem chave) ──
@@ -134,14 +138,14 @@ export default async function handler(req, res) {
   catch (e) { errors.push({ ticker: "IBOV", error: e.message }); }
 
   // WIN: futuros (contrato vigente) -> Ibovespa (proxy).
-  try { data.WIN = last(await fetchFuture("WIN")); sources.WIN = "futures"; }
+  try { const f = await fetchFuture("WIN"); data.WIN = last(f.bars); sources.WIN = "futures:" + f.symbol; }
   catch (e1) {
     if (ibovBars.length) { data.WIN = last(ibovBars); sources.WIN = "ibov-proxy"; errors.push({ ticker: "WIN", error: "futuros indisponível; usando Ibovespa", fallback: "ibov" }); }
     else errors.push({ ticker: "WIN", error: e1.message });
   }
 
   // WDO: futuros (contrato vigente) -> USD/BRL (Yahoo) x1000.
-  try { data.WDO = last(await fetchFuture("WDO")); sources.WDO = "futures"; }
+  try { const f = await fetchFuture("WDO"); data.WDO = last(f.bars); sources.WDO = "futures:" + f.symbol; }
   catch (e1) {
     try { data.WDO = last(await fetchYahoo("USDBRL=X", 1000)); sources.WDO = "usdbrl-proxy"; errors.push({ ticker: "WDO", error: "futuros indisponível; usando USD/BRL", fallback: "usdbrl" }); }
     catch (e2) { errors.push({ ticker: "WDO", error: e1.message + " | " + e2.message }); }
