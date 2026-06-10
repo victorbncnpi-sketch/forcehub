@@ -64,14 +64,20 @@ function mapBars(bars, scale = 1) {
 }
 
 // ── Brapi: Ibovespa (^BVSP) ──
+// O /quote do índice às vezes devolve historicalDataPrice vazio; usa getJson
+// (com retry) e tenta um range maior antes de desistir.
 async function fetchIbovBars(numDays) {
   if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");
-  const range = numDays <= 5 ? "5d" : numDays <= 21 ? "1mo" : "3mo";
-  const r = await fetch(`https://brapi.dev/api/quote/%5EBVSP?range=${range}&interval=1d&token=${BRAPI_TOKEN}`);
-  if (!r.ok) throw new Error(`quote IBOV HTTP ${r.status}`);
-  const q = (await r.json())?.results?.[0];
-  if (!q) throw new Error("Sem dados de IBOV");
-  return mapBars(findBarsArray(q.historicalDataPrice) || []);
+  const tok = `&token=${BRAPI_TOKEN}`;
+  for (const range of (numDays <= 5 ? ["5d", "1mo"] : ["1mo", "3mo"])) {
+    try {
+      const j = await getJson(`https://brapi.dev/api/quote/%5EBVSP?range=${range}&interval=1d${tok}`);
+      const q = j?.results?.[0];
+      const bars = mapBars(findBarsArray(q?.historicalDataPrice) || []);
+      if (bars.length) return bars;
+    } catch (_) { /* tenta o próximo range */ }
+  }
+  throw new Error("IBOV sem dados de histórico");
 }
 
 // ── Brapi: futuros (sempre com o token PRO) ──
@@ -179,15 +185,12 @@ export default async function handler(req, res) {
     catch (e2) { errors.push({ ticker: "WDO", error: e1.message + " | " + e2.message }); }
   }
 
-  // WIN e WDO são EOD com o mesmo atraso: alinha os dois num eixo de datas comum
-  // (últimos numDays pregões da união). Um dia que falte num contrato vira célula
-  // vazia, em vez de "puxar" um pregão antigo e desalinhar as tabelas. IBOV é à
-  // vista (pode ter o dia de hoje) e segue independente.
-  const futAxis = [...new Set([...winBars, ...wdoBars].map(b => b.date))].sort().slice(-numDays);
-  const alignTo = (bars) => { const m = new Map(bars.map(b => [b.date, b])); return futAxis.map(d => m.get(d) || { date: d, open: null, high: null, low: null, close: null, volume: null }); };
+  // Devolve só barras reais (com máx/mín) por ativo — sem inventar células
+  // vazias. O Panorama decide quais datas mostrar (eixo recente de futuros para
+  // WIN/WDO; IBOV à vista segue independente, pode ter o dia de hoje).
   data.IBOV = last(ibovBars);
-  data.WIN = futAxis.length ? alignTo(winBars) : last(winBars);
-  data.WDO = futAxis.length ? alignTo(wdoBars) : last(wdoBars);
+  data.WIN = last(winBars);
+  data.WDO = last(wdoBars);
 
   const payload = { ok: true, data, sources, errors, generatedAt: Date.now() };
   // Não cacheia respostas vazias (evita fixar um erro total); fallback ao último bom.
