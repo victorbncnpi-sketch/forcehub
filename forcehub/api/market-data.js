@@ -1,11 +1,12 @@
-// api/market-data.js — Cotações para o Panorama (fontes gratuitas, com fallback)
+// api/market-data.js — Cotações para o Panorama (brapi PRO com token; fallbacks)
 //
 // Estratégia por ativo (tenta a fonte primária; se falhar, usa o fallback):
-//   IBOV : Brapi /quote ^BVSP (Free + token)
-//   WIN  : Brapi futuros sandbox -> fallback: Ibovespa (^BVSP), pois o mini
-//          índice acompanha o índice (mesma escala de pontos)
-//   WDO  : Brapi futuros sandbox -> fallback: USD/BRL (Yahoo Finance) x1000,
-//          pois o mini dólar acompanha a cotação do dólar
+//   IBOV : Brapi /quote ^BVSP (token)
+//   WIN  : Brapi futuros com token (contrato vigente) -> fallback: Ibovespa
+//          (^BVSP), pois o mini índice acompanha o índice (mesma escala)
+//   WDO  : Brapi futuros com token (contrato vigente) -> fallback: USD/BRL
+//          (Yahoo Finance) x1000, pois o mini dólar acompanha o dólar
+// Todas as chamadas à brapi levam BRAPI_TOKEN — nunca o sandbox grátis.
 // Datas em Unix(segundos) ou ISO; barras sem high/low válidos são descartadas.
 
 import { getRedis } from "./_redis";
@@ -16,8 +17,8 @@ const UA = "Mozilla/5.0 (FORCEHUB)";
 
 const num = (v) => (v == null || isNaN(Number(v)) ? null : Number(v));
 
-// fetch + parse JSON com retry leve (o sandbox de futuros às vezes dá 404/5xx).
-async function getJson(url, tries = 2) {
+// fetch + parse JSON com retry leve (a API de futuros às vezes dá 404/5xx).
+async function getJson(url, tries = 3) {
   let last;
   for (let i = 0; i < tries; i++) {
     try { const r = await fetch(url, { headers: { "user-agent": UA } }); if (r.ok) return await r.json(); last = new Error("HTTP " + r.status); }
@@ -73,7 +74,7 @@ async function fetchIbovBars(numDays) {
   return mapBars(findBarsArray(q.historicalDataPrice) || []);
 }
 
-// ── Brapi: futuros (token PRO; sandbox sem token cobre só WIN/WDO) ──
+// ── Brapi: futuros (sempre com o token PRO) ──
 // O /historical exige o CONTRATO vigente (ex.: WINM26), não o código genérico.
 // Fluxo: term-structure (descobre o contrato) -> historical desse contrato.
 // Escolhe o contrato vigente: o de vencimento MAIS PRÓXIMO ainda não vencido (o
@@ -89,7 +90,10 @@ function pickFront(contracts, todayBRT) {
 }
 
 async function fetchFuture(asset) {
-  const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+  // Sempre com o token PRO: sem ele, nem tenta o sandbox grátis (limites e
+  // instabilidade) — cai direto no fallback do chamador (Ibov/USDBRL proxy).
+  if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");
+  const tok = `&token=${BRAPI_TOKEN}`;
   const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
   const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
   const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
