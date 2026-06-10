@@ -57,8 +57,9 @@ export function effectivePerms(u) {
 export function sessionCan(s, cap) {
   if (!s) return false;
   if (s.role === "superadmin") return true;
-  if (cap === "manage_staff") return false;            // só super admin
-  if (cap === "manage_clients") return s.role === "moderator";
+  // Moderadores têm os mesmos poderes administrativos; a única exceção (não
+  // alterar o super admin) é aplicada caso a caso em api/users.js.
+  if (cap === "manage_staff" || cap === "manage_clients") return s.role === "moderator";
   const perms = Array.isArray(s.perms) ? s.perms : effectivePerms(s);
   return perms.includes(cap);
 }

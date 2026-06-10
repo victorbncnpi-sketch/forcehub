@@ -1,11 +1,11 @@
-// api/cohort.js — Painel da Turma (consolidado do mentor). APENAS super admin.
+// api/cohort.js — Painel da Turma (consolidado do mentor). Apenas staff.
 //   GET /api/cohort -> { ok, students: [{ user, name, expiry, valorR, trades, diario, positions }] }
 //
 // Devolve os dados crus de cada cliente; o frontend reaproveita a mesma lógica
 // de estatística (buildEvents/computeStats) para agregar a turma e abrir o
 // dashboard de cada aluno. Para uma turma de mentoria o custo no Redis é baixo.
 import { getRedis } from "./_redis";
-import { getSession, getUsers } from "./_auth";
+import { getSession, getUsers, isStaff } from "./_auth";
 
 export default async function handler(req, res) {
   const redis = getRedis();
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   const sess = await getSession(req);
   if (!sess) return res.status(401).json({ ok: false, error: "Não autenticado." });
-  if (sess.role !== "superadmin") return res.status(403).json({ ok: false, error: "Apenas o super admin acessa o painel da turma." });
+  if (!isStaff(sess.role)) return res.status(403).json({ ok: false, error: "Apenas a equipe acessa o painel da turma." });
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Método não permitido" });
 
   try {

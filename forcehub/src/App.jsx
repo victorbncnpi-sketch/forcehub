@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
 
 // ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
-// Papéis: superadmin (irrestrito) · moderator (gere clientes) · client.
+// Papéis: superadmin (irrestrito e imutável) · moderator (tudo, exceto alterar o super admin) · client.
 // Capacidades de página: panorama · carteira (ler) · carteira_write · conselheiro.
 // Capacidades administrativas derivam do papel. O backend é a fonte de verdade;
 // aqui só escondemos o que o usuário não pode acessar.
@@ -20,8 +20,9 @@ const ROLE_LABEL = { superadmin: "Super admin", moderator: "Moderador", client: 
 function can(session, cap) {
   if (!session) return false;
   if (session.role === "superadmin") return true;
-  if (cap === "manage_clients") return session.role === "moderator";
-  if (cap === "manage_staff") return false;
+  // Moderadores: mesmos poderes do super admin (exceto alterar o próprio super
+  // admin, regra aplicada no backend e na tela de usuários).
+  if (cap === "manage_clients" || cap === "manage_staff" || cap === "cohort") return session.role === "moderator";
   return Array.isArray(session.perms) && session.perms.includes(cap);
 }
 
@@ -1790,8 +1791,8 @@ function ClientesScreen({ session }) {
       const m = modal;
       const action = m.mode === "create" ? "create" : "update";
       const base = { user: m.user.trim().toLowerCase(), name: m.name.trim(), expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
-      // Papel/permissões só vão no payload quando o super admin edita um não-super.
-      const adminFields = (isSuper && !m.targetSuper) ? { role: m.role, ...(m.role === "client" ? { perms: m.perms } : {}) } : {};
+      // Papel/permissões vão no payload para qualquer alvo que não seja o super admin.
+      const adminFields = !m.targetSuper ? { role: m.role, ...(m.role === "client" ? { perms: m.perms } : {}) } : {};
       await api.post("/api/users", { action, ...base, ...adminFields });
       setModal(null);
       await load();
@@ -1807,7 +1808,7 @@ function ClientesScreen({ session }) {
 
   const expired = (e) => { if (!e) return false; const t = new Date(); t.setHours(0, 0, 0, 0); return new Date(e) < t; };
   const fmtExp = (e) => !e ? "sem prazo" : new Date(e).toLocaleDateString("pt-BR");
-  const showRoleField = isSuper && !modal?.targetSuper;
+  const showRoleField = !modal?.targetSuper;
   const showPerms = showRoleField && modal?.role === "client";
   const COLS = "0.9fr 1fr 92px 1.15fr 116px 86px";
 
@@ -1829,12 +1830,12 @@ function ClientesScreen({ session }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 14, color: T.dim }}>
           {list.length} {list.length === 1 ? "usuário" : "usuários"}
-          {!isSuper && <span style={{ marginLeft: 6 }}>· você gerencia apenas clientes</span>}
+          {!isSuper && <span style={{ marginLeft: 6 }}>· apenas o super admin não pode ser alterado</span>}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {isSuper && <Button variant="ghost" size="sm" onClick={seedDemo} disabled={seeding} title="Cria/atualiza uma turma fictícia de teste">{seeding ? "⟳..." : "🧪 Turma demo"}</Button>}
-          {isSuper && <Button variant="ghost" size="sm" onClick={deleteDemo} disabled={seeding} title="Remove todos os alunos/dados de teste" style={{ color: T.red, borderColor: T.red }}>🗑 Limpar testes</Button>}
-          <Button size="sm" onClick={openCreate}>+ Novo {isSuper ? "usuário" : "cliente"}</Button>
+          <Button variant="ghost" size="sm" onClick={seedDemo} disabled={seeding} title="Cria/atualiza uma turma fictícia de teste">{seeding ? "⟳..." : "🧪 Turma demo"}</Button>
+          <Button variant="ghost" size="sm" onClick={deleteDemo} disabled={seeding} title="Remove todos os alunos/dados de teste" style={{ color: T.red, borderColor: T.red }}>🗑 Limpar testes</Button>
+          <Button size="sm" onClick={openCreate}>+ Novo usuário</Button>
         </div>
       </div>
 
@@ -1858,7 +1859,9 @@ function ClientesScreen({ session }) {
                     <div>{permCell(u)}</div>
                     <div style={{ fontSize: 13, color: expired(u.expiry) ? T.red : T.mut, fontFamily: T.mono }}>{fmtExp(u.expiry)}{expired(u.expiry) ? " ⚠" : ""}</div>
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(u)} style={{ padding: "5px 10px" }}>Editar</Button>
+                      {(u.role !== "superadmin" || (isSuper && u.user === currentUser))
+                        ? <Button variant="ghost" size="sm" onClick={() => openEdit(u)} style={{ padding: "5px 10px" }}>Editar</Button>
+                        : <span title="Somente o próprio super admin altera esta conta" style={{ fontSize: 13, color: T.dim, padding: "5px 10px" }}>🔒</span>}
                       {u.user !== currentUser && u.role !== "superadmin" && <Button variant="danger" size="sm" onClick={() => remove(u)} style={{ padding: "5px 9px" }} title="Remover">×</Button>}
                     </div>
                   </div>
@@ -1910,7 +1913,7 @@ function ClientesScreen({ session }) {
               </Field>
             )}
             {modal.role === "moderator" && showRoleField && (
-              <div style={{ fontSize: 12, color: T.dim }}>Moderadores têm acesso total às páginas e podem gerenciar clientes.</div>
+              <div style={{ fontSize: 12, color: T.dim }}>Moderadores têm acesso total: páginas, turma e gestão de usuários — só não alteram o super admin.</div>
             )}
 
             {formError && <div style={{ fontSize: 13, color: T.red }}>⚠ {formError}</div>}
@@ -2499,7 +2502,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
   );
 }
 
-// ─── Painel da Turma (consolidado do mentor — só super admin) ─────────────────
+// ─── Painel da Turma (consolidado do mentor — staff) ──────────────────────────
 const RANK_KEYS = [["somaR", "R acumulado"], ["winRate", "Acerto"], ["sqn", "SQN"], ["payoff", "Payoff"]];
 function TurmaScreen({ session }) {
   const [students, setStudents] = useState(null);

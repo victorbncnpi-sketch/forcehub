@@ -9,7 +9,7 @@
 //
 // APENAS super admin. A senha de todos é "demo2026".
 import { getRedis } from "./_redis";
-import { getSession, getUsers, saveUsers, hashPassword, DEFAULT_CLIENT_PERMS, SUPERADMIN } from "./_auth";
+import { getSession, getUsers, saveUsers, hashPassword, isStaff, DEFAULT_CLIENT_PERMS, SUPERADMIN } from "./_auth";
 
 const DEMO_PASS = "demo2026";
 
@@ -154,7 +154,7 @@ export default async function handler(req, res) {
 
   const sess = await getSession(req);
   if (!sess) return res.status(401).json({ ok: false, error: "Não autenticado." });
-  if (sess.role !== "superadmin") return res.status(403).json({ ok: false, error: "Apenas o super admin pode gerar/limpar dados de teste." });
+  if (!isStaff(sess.role)) return res.status(403).json({ ok: false, error: "Apenas a equipe pode gerar/limpar dados de teste." });
 
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
