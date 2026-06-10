@@ -76,14 +76,24 @@ async function fetchIbovBars(numDays) {
 // ── Brapi: futuros (token PRO; sandbox sem token cobre só WIN/WDO) ──
 // O /historical exige o CONTRATO vigente (ex.: WINM26), não o código genérico.
 // Fluxo: term-structure (descobre o contrato) -> historical desse contrato.
+// Escolhe o contrato vigente: o de vencimento MAIS PRÓXIMO ainda não vencido (o
+// mais líquido). Não confiar na ordem do array — ordenar pela data de vencimento.
+function pickFront(contracts, todayBRT) {
+  const valid = (contracts || []).filter(c => c && c.symbol);
+  const dated = valid.filter(c => c.expirationDate);
+  if (!dated.length) return valid[0] || null;
+  const upcoming = dated.filter(c => c.expirationDate >= todayBRT).sort((a, b) => a.expirationDate.localeCompare(b.expirationDate));
+  if (upcoming.length) return upcoming[0];
+  // Todos vencidos: usa o de vencimento mais recente.
+  return dated.slice().sort((a, b) => b.expirationDate.localeCompare(a.expirationDate))[0];
+}
+
 async function fetchFuture(asset) {
   const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
   const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
   const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
-  // Vigente = vencimento mais próximo AINDA NÃO vencido (na virada de contrato,
-  // contracts[0] pode ser o que vence hoje/já venceu).
   const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-  const front = contracts.find(c => c && c.symbol && (!c.expirationDate || c.expirationDate >= todayBRT)) || contracts.find(c => c && c.symbol);
+  const front = pickFront(contracts, todayBRT);
   if (!front) throw new Error(`futuros ${asset} sem contrato vigente`);
   const bars = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)); // série em future.history[]
   if (!bars || !bars.length) throw new Error(`futuros ${front.symbol} sem barras`);
@@ -105,19 +115,31 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET");
 
-  // Sondagem do sandbox de futuros (sem token): /api/market-data?probe=futures
+  // Diagnóstico dos futuros: /api/market-data?probe=futures
+  // Mostra os contratos, qual foi escolhido como vigente, e os últimos pregões
+  // crus (com presença de máx/mín) vs. os que sobrevivem ao filtro — assim dá
+  // para ver se um dia some na origem ou por falta de high/low. Usa o token (PRO)
+  // sem jamais expô-lo na resposta.
   if (req.query.probe === "futures") {
-    const probeUrl = async (url) => { try { const r = await fetch(url, { headers: { "user-agent": UA } }); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch (_) {} return { status: r.status, json: j, sample: (j ? JSON.stringify(j) : t).slice(0, 700) }; } catch (e) { return { error: String((e && e.message) || e) }; } };
+    const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+    const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
     const out = {};
     for (const asset of ["WIN", "WDO"]) {
       out[asset] = {};
-      const tsr = await probeUrl(`${FUT}/term-structure?asset=${asset}`);
-      const front = tsr.json && Array.isArray(tsr.json.contracts) && tsr.json.contracts[0] ? tsr.json.contracts[0].symbol : null;
-      out[asset]["term-structure"] = { status: tsr.status, sample: tsr.sample };
-      out[asset].front = front;
-      if (front) { const h = await probeUrl(`${FUT}/historical?symbol=${encodeURIComponent(front)}`); out[asset]["historical-front"] = { status: h.status, sample: h.sample }; }
+      try {
+        const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
+        const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
+        out[asset].contracts = contracts.map(c => ({ symbol: c.symbol, exp: c.expirationDate || null }));
+        const front = pickFront(contracts, todayBRT);
+        out[asset].front = front ? front.symbol : null;
+        if (front) {
+          const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)) || [];
+          out[asset].recentRaw = raw.slice(-14).map(b => ({ date: toISODate(b.date), high: b.high ?? null, low: b.low ?? null, close: (b.close ?? b.settlement) ?? null }));
+          out[asset].keptDates = mapBars(raw).slice(-14).map(b => b.date);
+        }
+      } catch (e) { out[asset].error = String((e && e.message) || e); }
     }
-    return res.status(200).json({ ok: true, probe: out });
+    return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
   }
 
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
@@ -134,22 +156,34 @@ export default async function handler(req, res) {
 
   // IBOV primeiro (reutilizado como fallback de WIN).
   let ibovBars = [];
-  try { ibovBars = await fetchIbovBars(numDays); data.IBOV = last(ibovBars); sources.IBOV = "brapi"; }
+  try { ibovBars = await fetchIbovBars(numDays); sources.IBOV = "brapi"; }
   catch (e) { errors.push({ ticker: "IBOV", error: e.message }); }
 
   // WIN: futuros (contrato vigente) -> Ibovespa (proxy).
-  try { const f = await fetchFuture("WIN"); data.WIN = last(f.bars); sources.WIN = "futures:" + f.symbol; }
+  let winBars = [];
+  try { const f = await fetchFuture("WIN"); winBars = f.bars; sources.WIN = "futures:" + f.symbol; }
   catch (e1) {
-    if (ibovBars.length) { data.WIN = last(ibovBars); sources.WIN = "ibov-proxy"; errors.push({ ticker: "WIN", error: "futuros indisponível; usando Ibovespa", fallback: "ibov" }); }
+    if (ibovBars.length) { winBars = ibovBars; sources.WIN = "ibov-proxy"; errors.push({ ticker: "WIN", error: "futuros indisponível; usando Ibovespa", fallback: "ibov" }); }
     else errors.push({ ticker: "WIN", error: e1.message });
   }
 
   // WDO: futuros (contrato vigente) -> USD/BRL (Yahoo) x1000.
-  try { const f = await fetchFuture("WDO"); data.WDO = last(f.bars); sources.WDO = "futures:" + f.symbol; }
+  let wdoBars = [];
+  try { const f = await fetchFuture("WDO"); wdoBars = f.bars; sources.WDO = "futures:" + f.symbol; }
   catch (e1) {
-    try { data.WDO = last(await fetchYahoo("USDBRL=X", 1000)); sources.WDO = "usdbrl-proxy"; errors.push({ ticker: "WDO", error: "futuros indisponível; usando USD/BRL", fallback: "usdbrl" }); }
+    try { wdoBars = await fetchYahoo("USDBRL=X", 1000); sources.WDO = "usdbrl-proxy"; errors.push({ ticker: "WDO", error: "futuros indisponível; usando USD/BRL", fallback: "usdbrl" }); }
     catch (e2) { errors.push({ ticker: "WDO", error: e1.message + " | " + e2.message }); }
   }
+
+  // WIN e WDO são EOD com o mesmo atraso: alinha os dois num eixo de datas comum
+  // (últimos numDays pregões da união). Um dia que falte num contrato vira célula
+  // vazia, em vez de "puxar" um pregão antigo e desalinhar as tabelas. IBOV é à
+  // vista (pode ter o dia de hoje) e segue independente.
+  const futAxis = [...new Set([...winBars, ...wdoBars].map(b => b.date))].sort().slice(-numDays);
+  const alignTo = (bars) => { const m = new Map(bars.map(b => [b.date, b])); return futAxis.map(d => m.get(d) || { date: d, open: null, high: null, low: null, close: null, volume: null }); };
+  data.IBOV = last(ibovBars);
+  data.WIN = futAxis.length ? alignTo(winBars) : last(winBars);
+  data.WDO = futAxis.length ? alignTo(wdoBars) : last(wdoBars);
 
   const payload = { ok: true, data, sources, errors, generatedAt: Date.now() };
   // Não cacheia respostas vazias (evita fixar um erro total); fallback ao último bom.
