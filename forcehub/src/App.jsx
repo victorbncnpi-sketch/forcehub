@@ -216,10 +216,14 @@ function AgendaPanel({ events, loading }) {
   const [excluded, setExcluded] = useState([]);
   const [impacts, setImpacts] = useState({ 3: true, 2: true, 1: true });
   const [grouped, setGrouped] = useState(false);
+  const [page, setPage] = useState(1);
   const countriesAll = Array.from(new Set(events.map(e => e.country)));
   const toggleCountry = (c) => setExcluded(x => x.includes(c) ? x.filter(v => v !== c) : [...x, c]);
   const toggleImpact = (k) => setImpacts(m => ({ ...m, [k]: !m[k] }));
   const filtered = events.filter(e => impacts[e.impact] && !excluded.includes(e.country));
+  // Volta para a 1ª página sempre que os filtros/agrupamento mudam.
+  useEffect(() => { setPage(1); }, [excluded, impacts, grouped]);
+  const pg = pageInfo(filtered, page, 8); // paginação só na lista plana
 
   const COLS = "52px 32px 1fr 80px 80px";
   const TE_URL = "https://tradingeconomics.com/calendar";
@@ -286,10 +290,11 @@ function AgendaPanel({ events, loading }) {
                       </div>
                     );
                   })
-                : filtered.map((n, i) => renderRow(n, i))}
+                : pg.slice.map((n, i) => renderRow(n, pg.from + i))}
             </div>
           </div>
         )}
+      {!loading && !grouped && filtered.length > 0 && <Pager info={pg} setPage={setPage} label="eventos" />}
     </Card>
   );
 }
