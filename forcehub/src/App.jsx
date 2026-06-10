@@ -396,11 +396,19 @@ function MarketBoard({ title, items, group, favs, onToggleFav, reorderable, onRe
   );
 }
 
+// A B3 acompanha o horário de verão dos EUA: com DST em NY o pregão regular vai
+// de 10h às 16h55 (call até 17h); sem DST, até 17h55 (call até 18h).
+function nyIsDst(now) {
+  const tzn = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "shortOffset" })
+    .formatToParts(now).find(p => p.type === "timeZoneName");
+  return /-4/.test(tzn ? tzn.value : "");
+}
 const SESSIONS = [
-  { city: "São Paulo", flag: "🇧🇷", tz: "America/Sao_Paulo", o: [10, 0], c: [18, 0] },
+  { city: "São Paulo", flag: "🇧🇷", tz: "America/Sao_Paulo", o: [10, 0], c: (now) => nyIsDst(now) ? [17, 0] : [18, 0] },
   { city: "Nova York", flag: "🇺🇸", tz: "America/New_York", o: [9, 30], c: [16, 0] },
   { city: "Londres", flag: "🇬🇧", tz: "Europe/London", o: [8, 0], c: [16, 30] },
-  { city: "Tóquio", flag: "🇯🇵", tz: "Asia/Tokyo", o: [9, 0], c: [15, 0] },
+  // Tóquio: fecha 15h30 desde nov/2024 (arrowhead 4.0); almoço 11h30–12h30.
+  { city: "Tóquio", flag: "🇯🇵", tz: "Asia/Tokyo", o: [9, 0], c: [15, 30], brk: [[11, 30], [12, 30]] },
 ];
 function sessionInfo(s, now) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: s.tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
@@ -409,8 +417,11 @@ function sessionInfo(s, now) {
   const mm = parseInt(get("minute"), 10);
   const weekend = get("weekday") === "Sat" || get("weekday") === "Sun";
   const mins = hh * 60 + mm;
-  const isOpen = !weekend && mins >= s.o[0] * 60 + s.o[1] && mins < s.c[0] * 60 + s.c[1];
-  return { isOpen, time: String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0") };
+  const c = typeof s.c === "function" ? s.c(now) : s.c;
+  let isOpen = !weekend && mins >= s.o[0] * 60 + s.o[1] && mins < c[0] * 60 + c[1];
+  let lunch = false;
+  if (isOpen && s.brk && mins >= s.brk[0][0] * 60 + s.brk[0][1] && mins < s.brk[1][0] * 60 + s.brk[1][1]) { isOpen = false; lunch = true; }
+  return { isOpen, lunch, time: String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0") };
 }
 function MarketClock() {
   const [now, setNow] = useState(new Date());
@@ -422,11 +433,11 @@ function MarketClock() {
         const i = sessionInfo(s, now);
         return (
           <div key={s.city} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, border: "1px solid " + T.line, background: T.inset }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: i.isOpen ? T.green : T.dim, boxShadow: i.isOpen ? "0 0 6px " + T.green : "none", flexShrink: 0 }} />
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: i.isOpen ? T.green : i.lunch ? T.gold : T.dim, boxShadow: i.isOpen ? "0 0 6px " + T.green : "none", flexShrink: 0 }} />
             <span style={{ fontSize: 13 }}>{s.flag}</span>
             <span style={{ fontSize: 12, color: T.text }}>{s.city}</span>
             <span style={{ fontSize: 12, color: T.mut, fontFamily: T.mono }}>{i.time}</span>
-            <span style={{ fontSize: 10, color: i.isOpen ? T.green : T.dim, fontWeight: 700, letterSpacing: 0.3 }}>{i.isOpen ? "ABERTO" : "fechado"}</span>
+            <span style={{ fontSize: 10, color: i.isOpen ? T.green : i.lunch ? T.gold : T.dim, fontWeight: 700, letterSpacing: 0.3 }}>{i.isOpen ? "ABERTO" : i.lunch ? "almoço" : "fechado"}</span>
           </div>
         );
       })}
