@@ -1,9 +1,10 @@
 // api/cohort.js — Painel da Turma (consolidado do mentor). Apenas staff.
-//   GET /api/cohort -> { ok, students: [{ user, name, expiry, valorR, trades, diario, positions }] }
+//   GET /api/cohort -> { ok, students: [{ user, name, role, staff, expiry, valorR, trades, diario, positions }] }
 //
-// Devolve os dados crus de cada cliente; o frontend reaproveita a mesma lógica
-// de estatística (buildEvents/computeStats) para agregar a turma e abrir o
-// dashboard de cada aluno. Para uma turma de mentoria o custo no Redis é baixo.
+// Devolve os dados crus de cada participante; o frontend reaproveita a mesma
+// lógica de estatística (buildEvents/computeStats) para agregar a turma e abrir
+// o dashboard de cada um. Inclui os alunos (clientes) e também os membros da
+// equipe que operam (têm diário próprio), marcados com staff:true.
 import { getRedis } from "./_redis";
 import { getSession, getUsers, isStaff } from "./_auth";
 
@@ -18,8 +19,9 @@ export default async function handler(req, res) {
 
   try {
     const users = await getUsers();
-    const clients = Object.values(users).filter(u => u && u.role === "client");
-    const students = await Promise.all(clients.map(async (u) => {
+    // Alunos (sempre) + equipe (só quem tem atividade própria, para não poluir).
+    const candidates = Object.values(users).filter(u => u && (u.role === "client" || isStaff(u.role)));
+    const rows = await Promise.all(candidates.map(async (u) => {
       const [t, c, p] = await Promise.all([
         redis.get("forcehub:trades:" + u.user),
         redis.get("forcehub:conselheiro:" + u.user),
@@ -29,8 +31,12 @@ export default async function handler(req, res) {
       const valorR = t && typeof t.valorR === "number" && t.valorR > 0 ? t.valorR : null;
       const diario = Array.isArray(c && c.diario) ? c.diario : [];
       const positions = Array.isArray(p) ? p : (Array.isArray(p && p.posicoes) ? p.posicoes : []);
-      return { user: u.user, name: u.name || u.user, expiry: u.expiry || null, valorR, trades, diario, positions };
+      const staff = isStaff(u.role);
+      // Membro da equipe só aparece se tiver dados próprios (trades/diário/posições).
+      if (staff && !trades.length && !diario.length && !positions.length) return null;
+      return { user: u.user, name: u.name || u.user, role: u.role, staff, expiry: u.expiry || null, valorR, trades, diario, positions };
     }));
+    const students = rows.filter(Boolean);
     students.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
     return res.status(200).json({ ok: true, students });
   } catch (e) {

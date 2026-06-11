@@ -2714,6 +2714,8 @@ function TurmaScreen({ session }) {
   const ativos = rows.filter(r => r.stat.n > 0);
 
   const nAtivos = ativos.length;
+  const nAlunos = all.filter(s => !s.staff).length;
+  const nEquipe = all.filter(s => s.staff).length;
   const lucrativos = ativos.filter(r => r.stat.somaR > 0).length;
   const avg = (f) => nAtivos ? ativos.reduce((s, r) => s + f(r), 0) / nAtivos : 0;
   const somaRTotal = ativos.reduce((s, r) => s + r.stat.somaR, 0);
@@ -2737,7 +2739,7 @@ function TurmaScreen({ session }) {
       {/* Cabeçalho + toggle */}
       <Card style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div style={{ fontSize: 13, color: T.dim }}>
-          <b style={{ color: T.text }}>{all.length}</b> alunos · <b style={{ color: T.text }}>{nAtivos}</b> com operações · <b style={{ color: T.green }}>{lucrativos}</b> lucrativos
+          <b style={{ color: T.text }}>{nAlunos}</b> alunos{nEquipe > 0 && <> · <b style={{ color: T.text }}>{nEquipe}</b> equipe</>} · <b style={{ color: T.text }}>{nAtivos}</b> com operações · <b style={{ color: T.green }}>{lucrativos}</b> lucrativos
         </div>
         <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
           style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
@@ -2771,7 +2773,7 @@ function TurmaScreen({ session }) {
           : atPg.slice.map(r => (
             <div key={r.st.user} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid " + T.line, flexWrap: "wrap" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{r.st.name} <span style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>· {r.st.user}</span></div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{r.st.name} {r.st.staff && <Badge tone="blue">equipe</Badge>} <span style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>· {r.st.user}</span></div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{r.alerts.map((a, i) => <Badge key={i} tone={a.tone}>{a.label}</Badge>)}</div>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setAluno(r.st)}>Ver aluno →</Button>
@@ -2801,7 +2803,7 @@ function TurmaScreen({ session }) {
                 className="fh-navitem">
                 <div style={{ fontSize: 13, color: rkPg.from + i < 3 ? T.gold : T.dim, fontWeight: 700 }}>{rkPg.from + i + 1}</div>
                 <div style={{ fontFamily: T.sans }}>
-                  <div style={{ fontSize: 14, color: T.text, fontWeight: 600 }}>{r.st.name}</div>
+                  <div style={{ fontSize: 14, color: T.text, fontWeight: 600 }}>{r.st.name} {r.st.staff && <Badge tone="blue">equipe</Badge>}</div>
                   {r.alerts.length > 0 && <span style={{ fontSize: 11, color: T.red }}>⚠ {r.alerts.length} alerta{r.alerts.length > 1 ? "s" : ""}</span>}
                 </div>
                 <div style={{ textAlign: "right", fontSize: 13, color: T.dim }}>{r.stat.n}</div>
