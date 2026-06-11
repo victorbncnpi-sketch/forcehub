@@ -11,10 +11,17 @@
 import { getRedis } from "./_redis";
 import {
   getSession, getUsers, saveUsers, hashPassword, publicUser,
-  sessionCan, SUPERADMIN, PAGE_CAPS, DEFAULT_CLIENT_PERMS,
+  sessionCan, SUPERADMIN, PAGE_CAPS, DEFAULT_CLIENT_PERMS, EMAIL_RE, normalizeEmail,
 } from "./_auth";
 
 const USER_RE = /^[a-z0-9._-]{3,32}$/;
+// Garante e-mail válido e não usado por outra conta (para reset/alertas futuros).
+function emailErr(email, users, selfUid) {
+  if (!email) return null; // opcional
+  if (!EMAIL_RE.test(email)) return "E-mail inválido.";
+  const dup = Object.values(users).find(u => u && u.email && u.email === email && u.user !== selfUid);
+  return dup ? "Este e-mail já está em uso por outra conta." : null;
+}
 const sanitizePerms = (arr) =>
   Array.isArray(arr) ? [...new Set(arr.filter(p => PAGE_CAPS.includes(p)))] : [...DEFAULT_CLIENT_PERMS];
 
@@ -49,9 +56,12 @@ export default async function handler(req, res) {
         if (!USER_RE.test(uid)) return res.status(400).json({ ok: false, error: "Usuário inválido (3-32 caracteres: letras, números, . _ -)." });
         if (users[uid]) return res.status(409).json({ ok: false, error: "Já existe um usuário com esse login." });
         if (!body.pass || String(body.pass).length < 6) return res.status(400).json({ ok: false, error: "A senha precisa ter ao menos 6 caracteres." });
+        const email = normalizeEmail(body.email);
+        const eErr = emailErr(email, users, uid);
+        if (eErr) return res.status(400).json({ ok: false, error: eErr });
         const role = body.role === "moderator" ? "moderator" : "client";
         const u = {
-          user: uid, name: String(body.name || uid).trim(), role,
+          user: uid, name: String(body.name || uid).trim(), email, role,
           expiry: body.expiry || null, pass: hashPassword(body.pass), createdAt: Date.now(),
         };
         if (role === "client") u.perms = sanitizePerms(body.perms);
@@ -65,6 +75,12 @@ export default async function handler(req, res) {
         if (targetIsSuper && !(isSuper && uid === sess.user)) return res.status(403).json({ ok: false, error: "O super admin não pode ser alterado." });
 
         if (body.name != null) target.name = String(body.name).trim();
+        if ("email" in body) {
+          const email = normalizeEmail(body.email);
+          const eErr = emailErr(email, users, uid);
+          if (eErr) return res.status(400).json({ ok: false, error: eErr });
+          target.email = email;
+        }
         if ("expiry" in body) target.expiry = body.expiry || null;
         if (body.pass) {
           if (String(body.pass).length < 6) return res.status(400).json({ ok: false, error: "A senha precisa ter ao menos 6 caracteres." });

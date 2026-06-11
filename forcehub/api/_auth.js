@@ -21,12 +21,19 @@ export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "tra
 // Cadastro inicial — usado apenas se o banco ainda não tiver usuários.
 // Estas senhas são só a semente; troque-as pelo painel admin após o 1º login.
 const SEED = [
-  { user: "victor",       pass: "forcehub2026", role: "superadmin", expiry: null,         name: "Victor Noronha" },
+  { user: "victor",       pass: "forcehub2026", role: "superadmin", expiry: null,         name: "Victor Noronha", email: "victorbn.cnpi@gmail.com" },
   { user: "cliente1",     pass: "xp2026c1",     role: "client",     expiry: "2027-06-01", name: "Cliente 1" },
   { user: "cliente2",     pass: "xp2026c2",     role: "client",     expiry: "2027-06-01", name: "Cliente 2" },
   { user: "andre.gain",   pass: "xp2026ag",     role: "client",     expiry: "2027-06-01", name: "Andre Gain" },
   { user: "maria.emilia", pass: "xp2026me",     role: "client",     expiry: "2027-06-01", name: "Maria Emilia" },
 ];
+
+// E-mail (opcional): usado para futuros alertas e redefinição de senha.
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function normalizeEmail(v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
+  return s ? s : null;
+}
 
 // ─── Senha (scrypt) ───────────────────────────────────────────────────────────
 export function hashPassword(pass) {
@@ -65,7 +72,7 @@ export function sessionCan(s, cap) {
 }
 
 export function publicUser(u) {
-  return u ? { user: u.user, name: u.name, role: u.role, expiry: u.expiry || null, perms: effectivePerms(u) } : null;
+  return u ? { user: u.user, name: u.name, email: u.email || null, role: u.role, expiry: u.expiry || null, perms: effectivePerms(u) } : null;
 }
 export function isExpired(u) {
   if (!u || !u.expiry) return false;
@@ -85,6 +92,7 @@ function normalizeUsers(map) {
     if (u.role === "admin") { u.role = u.user === SUPERADMIN ? "superadmin" : "moderator"; changed = true; }
     if (!ROLES.includes(u.role)) { u.role = "client"; changed = true; }
     if (u.role === "client" && !Array.isArray(u.perms)) { u.perms = [...DEFAULT_CLIENT_PERMS]; changed = true; }
+    if (!("email" in u)) { u.email = u.user === SUPERADMIN ? "victorbn.cnpi@gmail.com" : null; changed = true; }
     // Migração única do cap "trades" (Diário + Dashboard): concede a clientes
     // antigos uma vez só. O flag evita reconceder caso o admin opte por remover.
     if (u.role === "client" && Array.isArray(u.perms) && !u.tradesMigrated) {
@@ -104,7 +112,7 @@ export async function getUsers() {
     map = {};
     for (const s of SEED) {
       map[s.user] = {
-        user: s.user, name: s.name, role: s.role, expiry: s.expiry,
+        user: s.user, name: s.name, email: s.email || null, role: s.role, expiry: s.expiry,
         pass: hashPassword(s.pass), createdAt: Date.now(),
         ...(s.role === "client" ? { perms: [...DEFAULT_CLIENT_PERMS] } : {}),
       };

@@ -1789,8 +1789,8 @@ function ClientesScreen({ session }) {
   };
   useEffect(() => { load(); }, []);
 
-  const openCreate = () => { setFormError(""); setModal({ mode: "create", user: "", name: "", pass: "", role: "client", expiry: "", perms: [...DEFAULT_CLIENT_PERMS], targetSuper: false }); };
-  const openEdit = (u) => { setFormError(""); setModal({ mode: "edit", user: u.user, name: u.name || "", pass: "", role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "", perms: Array.isArray(u.perms) ? [...u.perms] : [...DEFAULT_CLIENT_PERMS], targetSuper: u.role === "superadmin" }); };
+  const openCreate = () => { setFormError(""); setModal({ mode: "create", user: "", name: "", email: "", pass: "", role: "client", expiry: "", perms: [...DEFAULT_CLIENT_PERMS], targetSuper: false }); };
+  const openEdit = (u) => { setFormError(""); setModal({ mode: "edit", user: u.user, name: u.name || "", email: u.email || "", pass: "", role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "", perms: Array.isArray(u.perms) ? [...u.perms] : [...DEFAULT_CLIENT_PERMS], targetSuper: u.role === "superadmin" }); };
 
   // Editar carteira pressupõe ler; tirar a leitura tira a edição.
   const togglePerm = (c) => setModal(m => {
@@ -1806,7 +1806,7 @@ function ClientesScreen({ session }) {
     try {
       const m = modal;
       const action = m.mode === "create" ? "create" : "update";
-      const base = { user: m.user.trim().toLowerCase(), name: m.name.trim(), expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
+      const base = { user: m.user.trim().toLowerCase(), name: m.name.trim(), email: m.email.trim(), expiry: m.expiry || null, ...(m.pass ? { pass: m.pass } : {}) };
       // Papel/permissões vão no payload para qualquer alvo que não seja o super admin.
       const adminFields = !m.targetSuper ? { role: m.role, ...(m.role === "client" ? { perms: m.perms } : {}) } : {};
       await api.post("/api/users", { action, ...base, ...adminFields });
@@ -1870,7 +1870,10 @@ function ClientesScreen({ session }) {
                 {list.map(u => (
                   <div key={u.user} style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, alignItems: "center" }}>
                     <div style={{ fontSize: 14, color: T.text, fontFamily: T.mono, display: "flex", alignItems: "center", gap: 6, overflow: "hidden", textOverflow: "ellipsis" }}>{u.user}{u.user === currentUser && <span style={{ fontSize: 10, color: T.dim }}>(você)</span>}</div>
-                    <div style={{ fontSize: 14, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name || "—"}</div>
+                    <div style={{ overflow: "hidden" }}>
+                      <div style={{ fontSize: 14, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name || "—"}</div>
+                      {u.email && <div title={u.email} style={{ fontSize: 11, color: T.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✉ {u.email}</div>}
+                    </div>
                     <div>{roleBadge(u.role)}</div>
                     <div>{permCell(u)}</div>
                     <div style={{ fontSize: 13, color: expired(u.expiry) ? T.red : T.mut, fontFamily: T.mono }}>{fmtExp(u.expiry)}{expired(u.expiry) ? " ⚠" : ""}</div>
@@ -1895,6 +1898,9 @@ function ClientesScreen({ session }) {
             </Field>
             <Field label="Nome">
               <Input value={modal.name} onChange={e => setModal(m => ({ ...m, name: e.target.value }))} placeholder="Nome do usuário" />
+            </Field>
+            <Field label="E-mail (opcional)" hint="Para futuros alertas e redefinição de senha.">
+              <Input type="email" value={modal.email} onChange={e => setModal(m => ({ ...m, email: e.target.value }))} placeholder="ex: joao@email.com" />
             </Field>
             <Field label={modal.mode === "create" ? "Senha" : "Nova senha"} hint={modal.mode === "edit" ? "Deixe em branco para manter a senha atual." : "Mínimo de 6 caracteres."}>
               <Input type="password" value={modal.pass} onChange={e => setModal(m => ({ ...m, pass: e.target.value }))} placeholder="••••••••" />
