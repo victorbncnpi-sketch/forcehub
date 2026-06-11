@@ -155,8 +155,13 @@ export default async function handler(req, res) {
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
   const redis = getRedis();
   const cacheKey = "forcehub:marketdata:" + numDays;
-  if (redis && req.query.refresh !== "1") {
-    try { const c = await redis.get(cacheKey); if (c && c.generatedAt && (Date.now() - c.generatedAt) < 20 * 60 * 1000) return res.status(200).json({ ...c, cached: true }); } catch (_) {}
+  const complete = (p) => p && p.data && (p.data.WIN || []).length && (p.data.WDO || []).length && (p.data.IBOV || []).length;
+  let prev = null;
+  if (redis) { try { prev = await redis.get(cacheKey); } catch (_) {} }
+  // Só serve o cache como fresco se estiver COMPLETO (os 3 ativos com dados); um
+  // payload com algum ativo vazio (ex.: IBOV de uma falha passada) é regenerado.
+  if (prev && req.query.refresh !== "1" && complete(prev) && prev.generatedAt && (Date.now() - prev.generatedAt) < 20 * 60 * 1000) {
+    return res.status(200).json({ ...prev, cached: true });
   }
 
   const data = { WIN: [], WDO: [], IBOV: [] };
@@ -192,10 +197,18 @@ export default async function handler(req, res) {
   data.WIN = last(winBars);
   data.WDO = last(wdoBars);
 
+  // Por ativo: se a fonte falhou agora mas o cache tinha dado bom, reaproveita —
+  // assim uma falha pontual (ex.: IBOV) não zera aquela tabela para todos.
+  for (const tk of ["WIN", "WDO", "IBOV"]) {
+    if (!data[tk].length && prev && prev.data && (prev.data[tk] || []).length) {
+      data[tk] = prev.data[tk];
+      sources[tk] = (prev.sources && prev.sources[tk]) || sources[tk];
+      errors.push({ ticker: tk, error: "fonte indisponível agora; mantido o último dado bom", fallback: "cache" });
+    }
+  }
+
   const payload = { ok: true, data, sources, errors, generatedAt: Date.now() };
-  // Não cacheia respostas vazias (evita fixar um erro total); fallback ao último bom.
   const total = data.WIN.length + data.WDO.length + data.IBOV.length;
   if (redis && total) { try { await redis.set(cacheKey, payload, { ex: 60 * 60 * 24 }); } catch (_) {} }
-  else if (redis && !total) { try { const c = await redis.get(cacheKey); if (c) return res.status(200).json({ ...c, cached: true, stale: true }); } catch (_) {} }
   return res.status(200).json(payload);
 }

@@ -605,7 +605,7 @@ function PanoramaScreen({ session }) {
         const real = (tk) => (j.data[tk] || []).filter(b => b && b.high != null && b.low != null);
         // WIN e WDO compartilham as últimas datas reais da união (mesmo atraso EOD);
         // cada um mostra apenas as datas que de fato possui. IBOV à vista é à parte.
-        const futDates = new Set([...real("WIN"), ...real("WDO")].map(b => b.date).sort().slice(-5));
+        const futDates = new Set([...new Set([...real("WIN"), ...real("WDO")].map(b => b.date))].sort().slice(-5));
         setRows(prev => {
           const next = { ...prev };
           TICKERS.forEach(tk => {
