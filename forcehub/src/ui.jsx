@@ -223,6 +223,7 @@ const ICON_PATHS = {
   users: <><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0" /><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" /><path d="M17.5 13.5a5.5 5.5 0 0 1 3 5" /></>,
   dashboard: <><path d="M3.5 14.5a8.5 8.5 0 0 1 17 0" /><line x1="12" y1="14.5" x2="16.2" y2="9.8" /><circle cx="12" cy="14.5" r="1.3" /></>,
   cohort: <><circle cx="7" cy="8" r="2.3" /><circle cx="16" cy="7" r="2.1" /><path d="M2.5 19a4.5 4.5 0 0 1 9 0" /><path d="M12.6 19a4.6 4.6 0 0 1 8.9-1.6" /></>,
+  upload: <><path d="M12 16V4" /><polyline points="7 9 12 4 17 9" /><path d="M4 16v3a1.8 1.8 0 0 0 1.8 1.8h12.4A1.8 1.8 0 0 0 20 19v-3" /></>,
 };
 
 export function Icon({ name, size = 18, color, style }) {

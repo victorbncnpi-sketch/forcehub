@@ -1999,8 +1999,12 @@ function Pager({ info, setPage, label = "itens" }) {
 function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
   const ev = [];
   (manual || []).forEach(m => {
-    const r = typeof m.r === "number" ? m.r : null;
-    const fin = typeof m.fin === "number" ? m.fin : (r != null && valorR ? +(r * valorR).toFixed(2) : null);
+    let r = typeof m.r === "number" ? m.r : null;
+    let fin = typeof m.fin === "number" ? m.fin : null;
+    // Deriva o que faltar a partir do valor de 1R (ex.: trades importados do
+    // Profit guardam só o resultado em R$; ganham R-múltiplo quando há valorR).
+    if (r == null && fin != null && valorR) r = +(fin / valorR).toFixed(3);
+    if (fin == null && r != null && valorR) fin = +(r * valorR).toFixed(2);
     const t = toTime(m.data);
     ev.push({ id: "m" + m.id, srcId: m.id, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: m.ativo || null, direcao: m.direcao || null, r, fin, setup: m.setup || "", notas: m.notas || "", fonte: "manual" });
   });
@@ -2020,6 +2024,68 @@ function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
     });
   }
   return ev.sort((a, b) => a.t - b.t);
+}
+
+// ─── Importação de CSV do Profit (Nelogica) ───────────────────────────────────
+// O relatório "Operações" do Profit vem em latin-1 (windows-1252), separado por
+// ";", com um preâmbulo (Conta/Titular/datas) antes da grade. Números em formato
+// BR (1.234,50) e datas dd/mm/aaaa hh:mm:ss. Mapeamos colunas por nome (tolerante
+// a acento), com fallback para a ordem fixa do layout do Profit.
+const deburr = (s) => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+// "1.234,50" / "-150,00" / "0" -> número (ponto = milhar, vírgula = decimal).
+function brNum(s) {
+  const t = String(s == null ? "" : s).trim().replace(/\./g, "").replace(",", ".");
+  if (!t || !/^-?\d+(\.\d+)?$/.test(t)) return null;
+  const n = parseFloat(t);
+  return isNaN(n) ? null : n;
+}
+// "05/01/2026 10:47:58" -> { data:"2026-01-05", hora:"10:47:58" }
+function brDateTime(s) {
+  const m = String(s == null ? "" : s).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}:\d{2}:\d{2}))?/);
+  if (!m) return null;
+  return { data: `${m[3]}-${m[2]}-${m[1]}`, hora: m[4] || "" };
+}
+// WING26 -> WIN ; WDOG26 -> WDO ; PETR4 -> PETR4 (corta só o vencimento de futuro).
+const rootAtivo = (s) => String(s || "").trim().toUpperCase().replace(/[FGHJKMNQUVXZ]\d{2}$/, "") || null;
+
+// Lê o texto já decodificado e devolve { trades, invalid, error }. Cada trade
+// guarda `ext` = chave única (contrato+data+hora+resultado) p/ deduplicar.
+function parseProfitCsv(text, valorR) {
+  const lines = String(text || "").split(/\r?\n/);
+  let hi = -1;
+  for (let i = 0; i < lines.length && i < 50; i++) {
+    const c = lines[i].split(";");
+    if (c.length >= 8 && deburr(c[0]) === "ativo") { hi = i; break; }
+  }
+  if (hi < 0) return { error: "Cabeçalho não reconhecido — confirme que é o relatório de Operações exportado do Profit (.csv)." };
+
+  const head = lines[hi].split(";").map(deburr);
+  const col = (name, fallback) => { const k = head.indexOf(name); return k >= 0 ? k : fallback; };
+  const iAtivo = col("ativo", 0);
+  const iAbert = col("abertura", 1);
+  const iLado = col("lado", 6);
+  let iRes = head.findIndex(h => h.startsWith("res. operacao") && !h.includes("%"));
+  if (iRes < 0) iRes = 13; // posição fixa no layout do Profit
+
+  const trades = [];
+  let invalid = 0;
+  for (let i = hi + 1; i < lines.length; i++) {
+    if (!lines[i] || !lines[i].trim()) continue;
+    const c = lines[i].split(";");
+    if (c.length <= iRes) { invalid++; continue; }
+    const dt = brDateTime(c[iAbert]);
+    const fin = brNum(c[iRes]);
+    const contrato = (c[iAtivo] || "").trim().toUpperCase();
+    const lado = (c[iLado] || "").trim().toUpperCase();
+    if (!dt || fin == null || !contrato) { invalid++; continue; }
+    const direcao = lado.startsWith("C") ? "COMPRA" : lado.startsWith("V") ? "VENDA" : null;
+    trades.push({
+      data: dt.data, ativo: rootAtivo(contrato), direcao,
+      r: null, fin, setup: "", notas: contrato,
+      ext: `profit:${contrato}:${dt.data} ${dt.hora}:${fin}`,
+    });
+  }
+  return { trades, invalid };
 }
 
 // Tabela de interpretação do SQN (System Quality Number) — como na planilha.
@@ -2171,6 +2237,16 @@ function BarsH({ title, rows }) {
   );
 }
 
+// Mini-cartão de número usado na prévia de importação.
+function ImpStat({ label, value, tone: tn = "text" }) {
+  return (
+    <div style={{ background: T.panel2, border: "1px solid " + T.line, borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: tone(tn), marginTop: 2, fontFamily: T.mono }}>{value}</div>
+    </div>
+  );
+}
+
 // ─── Diário de Trades (registro) ──────────────────────────────────────────────
 function TradesScreen({ session }) {
   const userId = session?.user;
@@ -2186,6 +2262,9 @@ function TradesScreen({ session }) {
   const baseForm = { data: today, ativo: "WIN", direcao: "COMPRA", unidade: "R", valor: "", setup: "", notas: "" };
   const [form, setForm] = useState(baseForm);
   const [vrInput, setVrInput] = useState("");
+  const [importErr, setImportErr] = useState("");
+  const [preview, setPreview] = useState(null); // { novos, dupes, invalid, total, sumFin, minD, maxD }
+  const fileRef = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -2221,6 +2300,41 @@ function TradesScreen({ session }) {
   };
   const removeTrade = (id) => persist(trades.filter(t => t.id !== id));
 
+  // Importação do CSV do Profit: lê em latin-1, faz o parse e deduplica contra o
+  // que já existe (pela chave `ext`) antes de mostrar a prévia para confirmação.
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // permite reimportar o mesmo arquivo depois
+    if (!file) return;
+    setImportErr(""); setPreview(null);
+    if (file.size > 5 * 1024 * 1024) { setImportErr("Arquivo muito grande (máx. 5 MB)."); return; }
+    try {
+      const buf = await file.arrayBuffer();
+      let text;
+      try { text = new TextDecoder("windows-1252").decode(buf); }
+      catch (e2) { text = new TextDecoder("iso-8859-1").decode(buf); }
+      const res = parseProfitCsv(text, valorR);
+      if (res.error) { setImportErr(res.error); return; }
+      const seen = new Set(trades.map(t => t.ext).filter(Boolean));
+      const batch = new Set();
+      const novos = [];
+      let dupes = 0;
+      for (const t of res.trades) {
+        if (seen.has(t.ext) || batch.has(t.ext)) { dupes++; continue; }
+        batch.add(t.ext); novos.push(t);
+      }
+      const sumFin = novos.reduce((s, t) => s + (t.fin || 0), 0);
+      const ds = novos.map(t => t.data).sort();
+      setPreview({ novos, dupes, invalid: res.invalid, total: res.trades.length, sumFin, minD: ds[0], maxD: ds[ds.length - 1] });
+    } catch (err) { setImportErr("Falha ao ler o arquivo: " + err.message); }
+  };
+  const confirmImport = () => {
+    if (!preview || !preview.novos.length) { setPreview(null); return; }
+    const novos = preview.novos.map(t => ({ ...t, id: idRef.current++ }));
+    persist([...trades, ...novos]);
+    setPreview(null);
+  };
+
   const events = buildEvents({ manual: trades, valorR, diario, posicoes: [], includeCarteira: false });
   const lista = [...events].sort((a, b) => b.t - a.t);
   const pg = pageInfo(lista, page, 10);
@@ -2246,9 +2360,40 @@ function TradesScreen({ session }) {
               <Button variant="ghost" size="sm" onClick={saveValorR}>Salvar</Button>
             </div>
           </Field>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: "none" }} />
+          <Button variant="ghost" onClick={() => { setImportErr(""); fileRef.current && fileRef.current.click(); }} title="Importar o relatório de Operações exportado do Profit (.csv)"><Icon name="upload" size={14} /> Importar Profit</Button>
           <Button variant="gold" onClick={() => { setErr(""); setShowForm(s => !s); }}>{showForm ? "× Fechar" : "+ Novo trade"}</Button>
         </div>
       </Card>
+
+      {importErr && <Banner tone="red">{importErr}</Banner>}
+
+      {/* Prévia da importação do Profit */}
+      {preview && (
+        <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, border: "1px solid " + T.lineGold }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.gold, display: "flex", alignItems: "center", gap: 7 }}><Icon name="upload" size={15} /> Importar do Profit</div>
+            <Button variant="ghost" size="sm" onClick={() => setPreview(null)} style={{ padding: "4px 10px" }}>×</Button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+            <ImpStat label="No arquivo" value={preview.total} />
+            <ImpStat label="Novas" value={preview.novos.length} tone={preview.novos.length ? "green" : "mut"} />
+            <ImpStat label="Já existentes" value={preview.dupes} tone="mut" />
+            <ImpStat label="Ignoradas" value={preview.invalid} tone={preview.invalid ? "gold" : "mut"} />
+          </div>
+          {preview.novos.length > 0 && (
+            <div style={{ fontSize: 13, color: T.mut }}>
+              Período {preview.minD ? preview.minD.split("-").reverse().join("/") : "—"} a {preview.maxD ? preview.maxD.split("-").reverse().join("/") : "—"} · Resultado somado{" "}
+              <b style={{ color: signTone(preview.sumFin) }}>{fmtBRL(preview.sumFin)}</b>
+            </div>
+          )}
+          {!valorR && preview.novos.length > 0 && <Banner tone="gold">Defina o <b>valor de 1R</b> acima para que estas operações entrem nas estatísticas do Dashboard (o resultado em R$ já fica registrado).</Banner>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" size="sm" onClick={() => setPreview(null)}>Cancelar</Button>
+            <Button size="sm" disabled={!preview.novos.length} onClick={confirmImport}>{preview.novos.length ? `Importar ${preview.novos.length} ${preview.novos.length === 1 ? "operação" : "operações"}` : "Nada novo para importar"}</Button>
+          </div>
+        </Card>
+      )}
 
       {!valorR && <Banner tone="gold">Defina o <b>valor de 1R em R$</b> para converter automaticamente entre R-múltiplo e financeiro (e habilitar todas as estatísticas).</Banner>}
 
