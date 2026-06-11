@@ -601,16 +601,16 @@ function PanoramaScreen({ session }) {
         if (!active || !j.ok || !j.data) return;
         let any = false;
         const manual = [];
-        // Só barras com máx/mín de verdade (nada de células vazias).
+        // Só barras com máx/mín de verdade (nada de células vazias). Cada ativo
+        // exibe os SEUS últimos 5 pregões reais — se um contrato tem buraco num
+        // dia (ex.: WIN sem 03/05), ele simplesmente puxa o pregão real anterior,
+        // sempre 5 linhas, sem células vazias.
         const real = (tk) => (j.data[tk] || []).filter(b => b && b.high != null && b.low != null);
-        // WIN e WDO compartilham as últimas datas reais da união (mesmo atraso EOD);
-        // cada um mostra apenas as datas que de fato possui. IBOV à vista é à parte.
-        const futDates = new Set([...new Set([...real("WIN"), ...real("WDO")].map(b => b.date))].sort().slice(-5));
         setRows(prev => {
           const next = { ...prev };
           TICKERS.forEach(tk => {
             const fmtIn = (v) => v == null ? "" : (tk === "WDO" ? Number(v).toFixed(1) : String(Math.round(Number(v))));
-            const bars = tk === "IBOV" ? real(tk).slice(-5) : real(tk).filter(b => futDates.has(b.date));
+            const bars = real(tk).slice(-5);
             if (bars.length) {
               any = true;
               next[tk] = bars.map(e => ({ date: e.date, label: ddmm(e.date), high: fmtIn(e.high), low: fmtIn(e.low) }));
