@@ -2262,6 +2262,7 @@ function TradesScreen({ session }) {
   const baseForm = { data: today, ativo: "WIN", direcao: "COMPRA", unidade: "R", valor: "", setup: "", notas: "" };
   const [form, setForm] = useState(baseForm);
   const [vrInput, setVrInput] = useState("");
+  const [vrStatus, setVrStatus] = useState(""); // "" | "saving" | "saved"
   const [importErr, setImportErr] = useState("");
   const [preview, setPreview] = useState(null); // { novos, dupes, invalid, total, sumFin, minD, maxD }
   const fileRef = useRef(null);
@@ -2282,10 +2283,16 @@ function TradesScreen({ session }) {
   const persist = async (nextTrades, nextValorR) => {
     const vr = nextValorR !== undefined ? nextValorR : valorR;
     setTrades(nextTrades); if (nextValorR !== undefined) setValorR(nextValorR);
-    try { await api.post("/api/trades", { trades: nextTrades, valorR: vr }); }
-    catch (e) { setErr("Falha ao salvar: " + e.message); }
+    try { await api.post("/api/trades", { trades: nextTrades, valorR: vr }); return true; }
+    catch (e) { setErr("Falha ao salvar: " + e.message); return false; }
   };
-  const saveValorR = () => { const v = parseFloat(String(vrInput).replace(",", ".")); persist(trades, v > 0 ? v : null); };
+  const saveValorR = async () => {
+    const v = parseFloat(String(vrInput).replace(",", "."));
+    setVrStatus("saving");
+    const ok = await persist(trades, v > 0 ? v : null);
+    setVrStatus(ok ? "saved" : "");
+    if (ok) setTimeout(() => setVrStatus(""), 1800);
+  };
   const addTrade = () => {
     const valor = parseFloat(String(form.valor).replace(",", "."));
     if (isNaN(valor)) { setErr("Informe o resultado da operação."); return; }
@@ -2372,8 +2379,14 @@ function TradesScreen({ session }) {
         <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
           <Field label="Valor de 1R (R$)">
             <div style={{ display: "flex", gap: 6 }}>
-              <Input mono type="number" step="0.01" value={vrInput} onChange={e => setVrInput(e.target.value)} placeholder="ex.: 250" style={{ width: 120 }} />
-              <Button variant="ghost" size="sm" onClick={saveValorR}>Salvar</Button>
+              <Input mono type="number" step="0.01" value={vrInput} onChange={e => { setVrInput(e.target.value); if (vrStatus) setVrStatus(""); }} placeholder="ex.: 250" style={{ width: 120 }} />
+              <Button variant={vrStatus === "saved" ? "gold" : "ghost"} size="sm" onClick={saveValorR} disabled={vrStatus === "saving"} style={{ minWidth: 96, transition: "all .15s" }}>
+                {vrStatus === "saving"
+                  ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Spinner size={13} /> Salvando…</span>
+                  : vrStatus === "saved"
+                    ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="check" size={14} /> Salvo!</span>
+                    : "Salvar"}
+              </Button>
             </div>
           </Field>
           <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: "none" }} />
