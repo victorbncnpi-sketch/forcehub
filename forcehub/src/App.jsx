@@ -2012,7 +2012,7 @@ function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
     const fin = typeof d.resultado === "number" ? d.resultado : null;
     const r = fin != null && valorR ? +(fin / valorR).toFixed(3) : null;
     const t = toTime(d.data);
-    ev.push({ id: "c" + i, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: null, direcao: null, r, fin, setup: "", notas: d.reflexao || d.dificuldade || "", fonte: "conselheiro" });
+    ev.push({ id: "c" + i, srcIdx: i, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: null, direcao: null, r, fin, setup: "", notas: d.reflexao || d.dificuldade || "", fonte: "conselheiro" });
   });
   if (includeCarteira) {
     (posicoes || []).filter(p => p.resultado != null && p.status !== "ABERTA").forEach(p => {
@@ -2299,6 +2299,22 @@ function TradesScreen({ session }) {
     setShowForm(false);
   };
   const removeTrade = (id) => persist(trades.filter(t => t.id !== id));
+  // Exclui uma entrada registrada pelo Conselheiro (reenvia o diário filtrado —
+  // mesmo padrão de gravação usado na tela do Conselheiro).
+  const removeConselheiro = async (idx) => {
+    const novo = diario.filter((_, i) => i !== idx);
+    setDiario(novo);
+    try { await api.post("/api/conselheiro?user=" + encodeURIComponent(userId || "anon"), { diario: novo }); }
+    catch (e) { setErr("Falha ao excluir: " + e.message); }
+  };
+  // Confirmação antes de remover, seja manual ou registro do Conselheiro.
+  const askRemove = (e) => {
+    const desc = [e.ativo, e.fin != null ? fmtBRL(e.fin) : (e.r != null ? fmtR(e.r) : null), e.t ? dmy(e.t) : null].filter(Boolean).join(" · ");
+    const extra = e.fonte === "conselheiro" ? "\n\nEsta operação foi registrada pelo Conselheiro; a anotação associada também será removida." : "";
+    if (!window.confirm(`Excluir esta operação?\n\n${desc || "(sem detalhes)"}${extra}`)) return;
+    if (e.fonte === "manual") removeTrade(e.srcId);
+    else if (e.fonte === "conselheiro") removeConselheiro(e.srcIdx);
+  };
 
   // Importação do CSV do Profit: lê em latin-1, faz o parse e deduplica contra o
   // que já existe (pela chave `ext`) antes de mostrar a prévia para confirmação.
@@ -2444,11 +2460,11 @@ function TradesScreen({ session }) {
           : (
             <div className="fh-scroll-x">
               <div style={{ minWidth: 720 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 44px", gap: 8, padding: "8px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
-                  <div>DATA</div><div>ORIGEM</div><div>ATIVO / SETUP</div><div style={{ textAlign: "right" }}>R</div><div style={{ textAlign: "right" }}>R$</div><div></div>
+                <div style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 48px", gap: 8, padding: "8px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
+                  <div>DATA</div><div>ORIGEM</div><div>ATIVO / SETUP</div><div style={{ textAlign: "right" }}>R</div><div style={{ textAlign: "right" }}>R$</div><div style={{ position: "sticky", right: 0, background: T.panel }}></div>
                 </div>
                 {pg.slice.map(e => (
-                  <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 44px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
+                  <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 48px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
                     <div style={{ fontSize: 12, color: T.mut }}>{e.t ? dmy(e.t) : "—"}</div>
                     <div><Badge tone={FONTE_TONE[e.fonte]}>{FONTE_LABEL[e.fonte]}</Badge></div>
                     <div style={{ fontFamily: T.sans }}>
@@ -2458,9 +2474,9 @@ function TradesScreen({ session }) {
                     </div>
                     <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: e.r == null ? T.dim : signTone(e.r) }}>{e.r == null ? "—" : fmtR(e.r)}</div>
                     <div style={{ textAlign: "right", fontSize: 13, color: e.fin == null ? T.dim : signTone(e.fin) }}>{e.fin == null ? "—" : fmtBRL(e.fin)}</div>
-                    <div style={{ textAlign: "right" }}>
-                      {e.fonte === "manual"
-                        ? <button className="fh-btn" onClick={() => removeTrade(e.srcId)} title="Excluir" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 30, fontSize: 15 }}>×</button>
+                    <div style={{ position: "sticky", right: 0, background: T.panel, display: "flex", justifyContent: "flex-end" }}>
+                      {(e.fonte === "manual" || e.fonte === "conselheiro")
+                        ? <button className="fh-btn" onClick={() => askRemove(e)} title="Excluir operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.red, borderRadius: 8, width: 32, height: 32, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="trash" size={15} /></button>
                         : <span title="Registrado automaticamente" style={{ fontSize: 14, color: T.dim }}>🔒</span>}
                     </div>
                   </div>
