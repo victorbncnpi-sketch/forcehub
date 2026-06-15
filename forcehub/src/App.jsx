@@ -2901,12 +2901,14 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
 
 // ─── Painel da Turma (consolidado do mentor — staff) ──────────────────────────
 const RANK_KEYS = [["somaR", "R acumulado"], ["winRate", "Acerto"], ["sqn", "SQN"], ["payoff", "Payoff"]];
+const RANK_PERIODS = [["tudo", "Tudo"], ["7d", "7 dias"], ["30d", "30 dias"], ["90d", "90 dias"]];
 function TurmaScreen({ session }) {
   const [students, setStudents] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [includeCarteira, setIncludeCarteira] = useState(false);
   const [sortKey, setSortKey] = useState("somaR");
+  const [period, setPeriod] = useState("tudo");
   const [aluno, setAluno] = useState(null);
   const [atPage, setAtPage] = useState(1);
   const [rkPage, setRkPage] = useState(1);
@@ -2939,7 +2941,7 @@ function TurmaScreen({ session }) {
     if (daysIdle != null && daysIdle >= 10) alerts.push({ tone: "gold", label: `Parado há ${daysIdle}d` });
     if (revenge > 0) alerts.push({ tone: "purple", label: `${revenge}× revenge/descontrole` });
     else if (bigLoss >= 3) alerts.push({ tone: "gold", label: `${bigLoss} perdas > 1.5R` });
-    return { st, stat, lastT, curDD, daysIdle, alerts };
+    return { st, stat, ev, lastT, curDD, daysIdle, alerts };
   });
   const ativos = rows.filter(r => r.stat.n > 0);
 
@@ -2956,11 +2958,25 @@ function TurmaScreen({ session }) {
   let cumAvg = 0; const curve = [0];
   months.forEach(m => { cumAvg += monthSet[m] / (nAtivos || 1); curve.push(+cumAvg.toFixed(2)); });
 
-  const sorters = { somaR: r => r.stat.somaR, winRate: r => r.stat.winRate, sqn: r => r.stat.sqn, payoff: r => r.stat.payoff };
-  const ranked = [...ativos].sort((a, b) => sorters[sortKey](b) - sorters[sortKey](a));
+  // Ranking com filtro de período: recomputa as estatísticas de cada aluno só
+  // com as operações da janela escolhida (7/30/90 dias) ou tudo. Mantém apenas
+  // quem operou na janela, e ordena pela métrica selecionada (maior primeiro).
+  const day0 = new Date(); day0.setHours(0, 0, 0, 0); // início do dia de hoje
+  const dias = period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : 0;
+  const periodCut = dias ? day0.getTime() - (dias - 1) * 864e5 : 0; // inclui hoje + (dias-1) anteriores
+  const rankRows = (periodCut
+    ? rows.map(r => ({ st: r.st, alerts: r.alerts, stat: computeStats(r.ev.filter(e => e.t >= periodCut)) }))
+    : rows.map(r => ({ st: r.st, alerts: r.alerts, stat: r.stat }))
+  ).filter(r => r.stat.n > 0);
+  // Payoff sem perdas (só gains) é "infinito": ordena no topo e exibe "∞".
+  const noLoss = (s) => s.losses === 0 && s.gains > 0;
+  const sorters = { somaR: r => r.stat.somaR, winRate: r => r.stat.winRate, sqn: r => r.stat.sqn, payoff: r => noLoss(r.stat) ? Infinity : r.stat.payoff };
+  const ranked = [...rankRows].sort((a, b) => sorters[sortKey](b) - sorters[sortKey](a));
+  const setRank = (fn, v) => { fn(v); setRkPage(1); };
   const atencao = rows.filter(r => r.alerts.length).sort((a, b) => b.curDD - a.curDD);
   const atPg = pageInfo(atencao, atPage, 5);
   const rkPg = pageInfo(ranked, rkPage, 10);
+  const periodLabel = (RANK_PERIODS.find(p => p[0] === period) || [])[1] || "Tudo";
 
   const chip = (active) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid " + (active ? T.lineGold : T.line), background: active ? T.goldSoft : "transparent", color: active ? T.gold : T.mut });
 
@@ -3014,13 +3030,22 @@ function TurmaScreen({ session }) {
 
       {/* Ranking */}
       <Card style={{ overflow: "hidden" }}>
-        <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Ranking da turma</div>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Ranking da turma</div>
+            <div style={{ fontSize: 12, color: T.dim }}>{ranked.length} {ranked.length === 1 ? "aluno" : "alunos"} · {period === "tudo" ? "histórico completo" : "últimos " + periodLabel.toLowerCase()}</div>
+          </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: T.dim }}>PERÍODO</span>
+            {RANK_PERIODS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setRank(setPeriod, k)} style={chip(period === k)}>{l}</button>)}
+            <span style={{ width: 1, height: 16, background: T.line, margin: "0 4px" }} />
             <span style={{ fontSize: 11, color: T.dim }}>ORDENAR</span>
-            {RANK_KEYS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setSortKey(k)} style={chip(sortKey === k)}>{l}</button>)}
+            {RANK_KEYS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setRank(setSortKey, k)} style={chip(sortKey === k)}>{l}</button>)}
           </div>
         </div>
+        {ranked.length === 0
+          ? <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum aluno operou {period === "tudo" ? "ainda" : "nos últimos " + periodLabel.toLowerCase()}.</div>
+          : <>
         <div className="fh-scroll-x">
           <div style={{ minWidth: 760 }}>
             <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 70px 70px 80px 70px 70px 90px", gap: 8, padding: "9px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
@@ -3040,13 +3065,14 @@ function TurmaScreen({ session }) {
                 <div style={{ textAlign: "right", fontSize: 13, color: T.mut }}>{(r.stat.winRate * 100).toFixed(0)}%</div>
                 <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: signTone(r.stat.somaR) }}>{fmtR(r.stat.somaR, 1)}</div>
                 <div style={{ textAlign: "right", fontSize: 13, color: tone(r.stat.sqnBand.tone) }}>{r.stat.sqn.toFixed(2)}</div>
-                <div style={{ textAlign: "right", fontSize: 13, color: r.stat.payoff >= 1 ? T.green : T.red }}>{r.stat.payoff.toFixed(2)}</div>
+                <div style={{ textAlign: "right", fontSize: 13, color: noLoss(r.stat) || r.stat.payoff >= 1 ? T.green : T.red }}>{noLoss(r.stat) ? "∞" : r.stat.payoff.toFixed(2)}</div>
                 <div style={{ textAlign: "right" }}><span style={{ fontSize: 12, color: T.gold }}>Ver →</span></div>
               </div>
             ))}
           </div>
         </div>
         <Pager info={rkPg} setPage={setRkPage} label="alunos" />
+        </>}
       </Card>
       </>}
     </div>
