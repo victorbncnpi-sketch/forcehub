@@ -808,6 +808,18 @@ function PanoramaScreen({ session }) {
 }
 
 // ─── Linha de posição ───────────────────────────────────────────────────────────
+// Converte um preço que pode vir como número ou string ("38,50"/"1.234,50") em
+// número (ou null). Usado ao normalizar a resposta da IA na busca da carteira.
+function numBR(v) {
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  if (v == null) return null;
+  let s = String(v).trim().replace(/[^\d.,-]/g, "");
+  if (s.includes(",") && s.includes(".")) s = s.replace(/\./g, "").replace(",", ".");
+  else if (s.includes(",")) s = s.replace(",", ".");
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
 // Direção de uma recomendação/posição. Compat: se não houver campo `direcao`,
 // deduz por alvo vs entrada (alvo abaixo da entrada = venda/short).
 const tradeDir = (x) => (x.direcao === "VENDA" || (x.direcao == null && Number(x.alvo) < Number(x.entrada))) ? "VENDA" : "COMPRA";
@@ -1247,8 +1259,11 @@ function CarteiraScreen({ canWrite }) {
       const today = new Date().toLocaleDateString("pt-BR");
       const prompt = "Voce e analista tecnico B3 swing trade. Hoje: " + today + ". Use web_search: melhores oportunidades tecnicas de swing trade na B3 hoje, tanto de COMPRA quanto de VENDA (short). RESPONDA EM PORTUGUES. Inclua oportunidades nos DOIS sentidos quando houver. Em cada item, 'direcao' = 'COMPRA' ou 'VENDA'. Para COMPRA: alvo ACIMA da entrada e stop ABAIXO. Para VENDA: alvo ABAIXO da entrada e stop ACIMA. Retorne APENAS JSON valido sem texto extra: {\"data\":\"" + today + "\",\"contexto\":\"resumo do mercado\",\"oportunidades\":[{\"ticker\":\"PETR4\",\"nome\":\"Petrobras PN\",\"direcao\":\"COMPRA\",\"entrada\":38.50,\"alvo\":40.50,\"stop\":37.20,\"setup\":\"Rompimento\",\"racional\":\"Análise\",\"prazo\":\"2-3 dias\"},{\"ticker\":\"VALE3\",\"nome\":\"Vale ON\",\"direcao\":\"VENDA\",\"entrada\":60.00,\"alvo\":57.00,\"stop\":61.50,\"setup\":\"Perda de suporte\",\"racional\":\"Análise\",\"prazo\":\"2-4 dias\"}]}";
       const parsed = await aiSearchJSON(prompt, ['"oportunidades"', '"oportunidade"', '"opportunities"']);
-      const ops = parsed.oportunidades || parsed.oportunidade || parsed.opportunities || [];
-      if (!ops.length) throw new Error("Nenhuma oportunidade encontrada. Tente novamente.");
+      const raw = parsed.oportunidades || parsed.oportunidade || parsed.opportunities || [];
+      if (!raw.length) throw new Error("Nenhuma oportunidade encontrada. Tente novamente.");
+      // A IA às vezes devolve os preços como string ("38,50"/"38.50"); normaliza
+      // para número para os cálculos (.toFixed/R:R) e para o registro persistido.
+      const ops = raw.map(o => ({ ...o, entrada: numBR(o.entrada), alvo: numBR(o.alvo), stop: numBR(o.stop) }));
       setScanResult({ data: parsed.data || today, contexto: parsed.contexto || "", oportunidades: ops });
     } catch (e) { setScanError(e.message); }
     setScanning(false);
