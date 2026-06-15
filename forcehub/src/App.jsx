@@ -116,6 +116,7 @@ const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString("pt-BR", { hour: "2
 function LoginScreen({ onLogin }) {
   const [user, setUser] = useState(""); const [pass, setPass] = useState("");
   const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState("login"); // "login" | "interesse" | "enviado"
   const handle = async () => {
     if (loading) return;
     setLoading(true); setError("");
@@ -135,21 +136,68 @@ function LoginScreen({ onLogin }) {
           <div style={{ fontSize: 13, color: T.gold, letterSpacing: 3, fontWeight: 700 }}>PARA CLIENTES XP</div>
           <div style={{ fontSize: 12, color: T.dim, letterSpacing: 2 }}>DE TRADER PARA TRADER</div>
         </div>
-        <Card style={{ width: "100%", padding: 28, display: "flex", flexDirection: "column", gap: 18 }}>
-          <div style={{ fontSize: 13, color: T.mut, letterSpacing: 1, textAlign: "center", textTransform: "uppercase" }}>Acesso à plataforma</div>
-          <Field label="Usuário">
-            <Input value={user} onChange={e => setUser(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} placeholder="seu usuário" />
-          </Field>
-          <Field label="Senha">
-            <Input type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} placeholder="••••••••" />
-          </Field>
-          {error && <div style={{ fontSize: 13, color: T.red, textAlign: "center" }}>⚠ {error}</div>}
-          <Button size="lg" disabled={loading} onClick={handle} style={{ width: "100%", letterSpacing: 1 }}>
-            {loading ? "VERIFICANDO..." : "ENTRAR →"}
-          </Button>
-        </Card>
+        {mode === "login" ? (
+          <Card style={{ width: "100%", padding: 28, display: "flex", flexDirection: "column", gap: 18 }}>
+            <div style={{ fontSize: 13, color: T.mut, letterSpacing: 1, textAlign: "center", textTransform: "uppercase" }}>Acesso à plataforma</div>
+            <Field label="Usuário">
+              <Input value={user} onChange={e => setUser(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} placeholder="seu usuário" />
+            </Field>
+            <Field label="Senha">
+              <Input type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} placeholder="••••••••" />
+            </Field>
+            {error && <div style={{ fontSize: 13, color: T.red, textAlign: "center" }}>⚠ {error}</div>}
+            <Button size="lg" disabled={loading} onClick={handle} style={{ width: "100%", letterSpacing: 1 }}>
+              {loading ? "VERIFICANDO..." : "ENTRAR →"}
+            </Button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, color: T.dim, fontSize: 11 }}>
+              <div style={{ flex: 1, height: 1, background: T.line }} /> ainda não é cliente? <div style={{ flex: 1, height: 1, background: T.line }} />
+            </div>
+            <Button variant="ghost" onClick={() => { setError(""); setMode("interesse"); }} style={{ width: "100%" }}>
+              <Icon name="userplus" size={15} /> Mostrar interesse
+            </Button>
+          </Card>
+        ) : (
+          <InteresseForm onBack={() => setMode("login")} done={mode === "enviado"} onDone={() => setMode("enviado")} />
+        )}
       </div>
     </div>
+  );
+}
+
+// Formulário público de pré-cadastro (nome, e-mail, telefone) na tela de login.
+function InteresseForm({ onBack, done, onDone }) {
+  const [f, setF] = useState({ nome: "", email: "", telefone: "" });
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF(s => ({ ...s, [k]: e.target.value }));
+  const enviar = async () => {
+    if (busy) return;
+    setBusy(true); setErr("");
+    try {
+      await api.post("/api/leads", { action: "submit", nome: f.nome, email: f.email, telefone: f.telefone });
+      onDone();
+    } catch (e) { setErr(e.message || "Não foi possível enviar. Tente novamente."); setBusy(false); }
+  };
+  if (done) {
+    return (
+      <Card style={{ width: "100%", padding: 28, display: "flex", flexDirection: "column", gap: 16, alignItems: "center", textAlign: "center" }}>
+        <div style={{ width: 52, height: 52, borderRadius: "50%", background: T.green + "1a", display: "flex", alignItems: "center", justifyContent: "center", color: T.green }}><Icon name="check" size={26} /></div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>Interesse registrado!</div>
+        <div style={{ fontSize: 13.5, color: T.mut }}>Recebemos seus dados. Em breve a equipe entra em contato para liberar seu acesso ao ForceHub.</div>
+        <Button variant="ghost" onClick={onBack} style={{ width: "100%" }}>← Voltar ao login</Button>
+      </Card>
+    );
+  }
+  return (
+    <Card style={{ width: "100%", padding: 28, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ fontSize: 13, color: T.mut, letterSpacing: 1, textAlign: "center", textTransform: "uppercase" }}>Mostrar interesse</div>
+      <div style={{ fontSize: 13, color: T.dim, textAlign: "center", marginTop: -6 }}>Deixe seus dados e a equipe entra em contato para liberar seu acesso.</div>
+      <Field label="Nome completo"><Input value={f.nome} onChange={set("nome")} placeholder="Seu nome" /></Field>
+      <Field label="E-mail"><Input type="email" value={f.email} onChange={set("email")} placeholder="seu@email.com" /></Field>
+      <Field label="Telefone (com DDD)"><Input value={f.telefone} onChange={set("telefone")} onKeyDown={e => e.key === "Enter" && enviar()} placeholder="(11) 99999-9999" /></Field>
+      {err && <div style={{ fontSize: 13, color: T.red, textAlign: "center" }}>⚠ {err}</div>}
+      <Button size="lg" disabled={busy} onClick={enviar} style={{ width: "100%", letterSpacing: 1 }}>{busy ? "ENVIANDO..." : "ENVIAR INTERESSE →"}</Button>
+      <Button variant="ghost" onClick={onBack} style={{ width: "100%" }}>← Voltar ao login</Button>
+    </Card>
   );
 }
 
@@ -162,6 +210,7 @@ const NAV = [
   { key: "dashboard",   icon: "dashboard",   label: "Dashboard",   title: "Dashboard de Performance", cap: "trades" },
   { key: "turma",       icon: "cohort",      label: "Turma",       title: "Painel da Turma",       cap: "cohort" },
   { key: "clientes",    icon: "users",       label: "Clientes",    title: "Gestão de Clientes",    cap: "manage_clients" },
+  { key: "interessados", icon: "userplus",   label: "Interessados", title: "Interessados (pré-cadastros)", cap: "manage_clients" },
 ];
 
 // Primeira página acessível ao usuário (para o destino padrão pós-login).
@@ -1950,6 +1999,143 @@ function ClientesScreen({ session }) {
   );
 }
 
+// ─── Interessados (pré-cadastros do "Mostrar interesse") ──────────────────────
+function fmtTelefone(d) {
+  const s = String(d || "").replace(/\D/g, "");
+  if (s.length === 11) return `(${s.slice(0, 2)}) ${s.slice(2, 7)}-${s.slice(7)}`;
+  if (s.length === 10) return `(${s.slice(0, 2)}) ${s.slice(2, 6)}-${s.slice(6)}`;
+  return s || "—";
+}
+function InteressadosScreen({ session }) {
+  const [leads, setLeads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [modal, setModal] = useState(null);   // converter: { lead, user, role, expiry }
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [result, setResult] = useState(null); // credenciais geradas: { login, pass, name, email }
+  const [copied, setCopied] = useState(false);
+
+  const load = async () => {
+    setLoading(true); setError("");
+    try { const j = await api.get("/api/leads"); setLeads(j.leads || []); }
+    catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const openConvert = (lead) => { setFormError(""); setModal({ lead, user: "", role: "client", expiry: "" }); };
+  const convert = async () => {
+    if (saving) return;
+    setSaving(true); setFormError("");
+    try {
+      const m = modal;
+      const j = await api.post("/api/leads", { action: "convert", id: m.lead.id, user: m.user.trim().toLowerCase(), role: m.role, expiry: m.expiry || null });
+      setModal(null);
+      setResult({ login: j.login, pass: j.pass, name: j.name, email: j.email });
+      await load();
+    } catch (e) { setFormError(e.message); }
+    finally { setSaving(false); }
+  };
+  const descartar = async (lead) => {
+    if (!window.confirm(`Descartar o interesse de "${lead.nome}"? Esta ação não pode ser desfeita.`)) return;
+    try { await api.post("/api/leads", { action: "delete", id: lead.id }); await load(); }
+    catch (e) { setError(e.message); }
+  };
+
+  const msgFor = (r) => `Olá ${r.name}! Seu acesso ao ForceHub está pronto. 🚀\n\nAcesse: ${window.location.origin}\nUsuário: ${r.login}\nSenha: ${r.pass}\n\nRecomendamos trocar a senha após o primeiro acesso.`;
+  const copyCreds = async (r) => {
+    try { await navigator.clipboard.writeText(msgFor(r)); setCopied(true); setTimeout(() => setCopied(false), 1800); }
+    catch (e) { setError("Não foi possível copiar automaticamente — selecione e copie o texto manualmente."); }
+  };
+
+  const COLS = "1.1fr 1.3fr 140px 104px 168px";
+
+  return (
+    <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ fontSize: 14, color: T.dim }}>
+        {leads.length} {leads.length === 1 ? "interessado aguardando" : "interessados aguardando"} · convertê-los cria o acesso com uma senha automática para você enviar.
+      </div>
+      {error && <Banner tone="red">{error}</Banner>}
+
+      {loading ? <Loading label="Carregando interessados..." />
+        : leads.length === 0 ? <EmptyState icon={<Icon name="userplus" size={40} />} title="Nenhum interessado no momento" desc='Quando alguém usar "Mostrar interesse" na tela de login, o pré-cadastro aparece aqui.' />
+        : (
+          <Card style={{ overflow: "hidden" }}>
+            <div className="fh-scroll-x">
+              <div style={{ minWidth: 720 }}>
+                <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
+                  {["NOME", "E-MAIL", "TELEFONE", "RECEBIDO", ""].map((h, i) => <div key={i} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: i === 4 ? "right" : "left" }}>{h}</div>)}
+                </div>
+                {leads.map(l => (
+                  <div key={l.id} style={{ display: "grid", gridTemplateColumns: COLS, gap: 10, padding: "12px 16px", borderBottom: "1px solid " + T.line, alignItems: "center" }}>
+                    <div style={{ fontSize: 14, color: T.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.nome}</div>
+                    <div title={l.email} style={{ fontSize: 13, color: T.mut, fontFamily: T.mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.email}</div>
+                    <div style={{ fontSize: 13, color: T.mut, fontFamily: T.mono }}>{fmtTelefone(l.telefone)}</div>
+                    <div style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>{l.createdAt ? dmy(l.createdAt) : "—"}</div>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <Button size="sm" onClick={() => openConvert(l)} style={{ padding: "5px 10px" }}>Converter →</Button>
+                      <Button variant="ghost" size="sm" onClick={() => descartar(l)} title="Descartar" style={{ padding: "5px 9px", color: T.red, borderColor: T.red }}><Icon name="trash" size={14} /></Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        )}
+
+      {/* Modal de conversão */}
+      {modal && (
+        <Modal title={"Converter interessado — " + modal.lead.nome} onClose={() => setModal(null)} width={460}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: 12.5, color: T.dim, background: T.inset, border: "1px solid " + T.line, borderRadius: 8, padding: "10px 12px" }}>
+              ✉ {modal.lead.email} · ☎ {fmtTelefone(modal.lead.telefone)}
+            </div>
+            <Field label="Login (opcional)" hint="Em branco = geramos um a partir do nome. Letras minúsculas, números, . _ -">
+              <Input value={modal.user} onChange={e => setModal(m => ({ ...m, user: e.target.value }))} placeholder="(gerado automaticamente)" mono />
+            </Field>
+            <div style={{ display: "flex", gap: 12 }}>
+              <Field label="Papel" style={{ flex: 1 }}>
+                <select className="fh-input" value={modal.role} onChange={e => setModal(m => ({ ...m, role: e.target.value }))} style={{ width: "100%" }}>
+                  <option value="client">Cliente</option>
+                  <option value="moderator">Moderador</option>
+                </select>
+              </Field>
+              <Field label="Acesso até (opcional)" style={{ flex: 1 }}>
+                <Input type="date" value={modal.expiry} onChange={e => setModal(m => ({ ...m, expiry: e.target.value }))} />
+              </Field>
+            </div>
+            <div style={{ fontSize: 12, color: T.dim }}>A senha é gerada automaticamente e exibida no fim para você enviar ao cliente.</div>
+            {formError && <div style={{ fontSize: 13, color: T.red }}>⚠ {formError}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
+              <Button variant="ghost" onClick={() => setModal(null)}>Cancelar</Button>
+              <Button onClick={convert} disabled={saving}>{saving ? "Criando..." : "Criar acesso →"}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Credenciais geradas */}
+      {result && (
+        <Modal title="Acesso criado com sucesso" onClose={() => setResult(null)} width={460}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: 13.5, color: T.mut }}><b style={{ color: T.text }}>{result.name}</b> agora tem acesso ativo. Envie as credenciais abaixo — <b style={{ color: T.gold }}>a senha não será exibida novamente</b>.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 12px", background: T.inset, border: "1px solid " + T.lineGold, borderRadius: 10, padding: "14px 16px", fontFamily: T.mono }}>
+              <span style={{ fontSize: 12, color: T.dim }}>Usuário</span><span style={{ fontSize: 14, color: T.text, fontWeight: 700 }}>{result.login}</span>
+              <span style={{ fontSize: 12, color: T.dim }}>Senha</span><span style={{ fontSize: 14, color: T.gold, fontWeight: 700, letterSpacing: 1 }}>{result.pass}</span>
+            </div>
+            <div style={{ fontSize: 12, color: T.dim, whiteSpace: "pre-wrap", background: T.panel2, border: "1px solid " + T.line, borderRadius: 8, padding: "10px 12px" }}>{msgFor(result)}</div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <Button variant={copied ? "gold" : "ghost"} onClick={() => copyCreds(result)}>{copied ? <><Icon name="check" size={14} /> Copiado!</> : <><Icon name="copy" size={14} /> Copiar mensagem</>}</Button>
+              <Button onClick={() => setResult(null)}>Concluir</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── App ────────────────────────────────────────────────────────────────────────
 // ─── Diário de Trades + Dashboard de Performance ──────────────────────────────
 // Inspirado na planilha de mentoria: cada operação vira um "evento" medido em
@@ -2904,6 +3090,7 @@ export default function App() {
         {current === "dashboard" && <DashboardScreen session={session} />}
         {current === "turma" && <TurmaScreen session={session} />}
         {current === "clientes" && <ClientesScreen session={session} />}
+        {current === "interessados" && <InteressadosScreen session={session} />}
       </Shell>
     </>
   );

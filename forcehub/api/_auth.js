@@ -49,6 +49,16 @@ export function verifyPassword(pass, stored) {
   return h.length === hb.length && timingSafeEqual(h, hb);
 }
 
+// Senha gerada automaticamente para novos acessos: legível e sem caracteres
+// ambíguos (sem 0/O, 1/l/I), para o staff repassar ao cliente sem confusão.
+export function generatePassword(len = 10) {
+  const alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
 // ─── Modelagem / permissões ───────────────────────────────────────────────────
 export function isStaff(role) { return role === "superadmin" || role === "moderator"; }
 
