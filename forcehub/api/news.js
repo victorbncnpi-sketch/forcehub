@@ -1,7 +1,8 @@
-// api/news.js — Agenda econômica (Brasil + EUA) + resumo do dia, com cache.
+// api/news.js — Agenda econômica (Brasil + global) + resumo do dia, com cache.
 //
 // Eventos: feed gratuito e estruturado do ForexFactory (faireconomy.media),
-//   filtrado para HOJE e países US/BR. Muito mais completo que pedir à IA.
+//   filtrado para HOJE. Esse feed é um calendário FOREX (moedas maiores) e NÃO
+//   cobre o Brasil, então enriquecemos com os eventos BR de hoje via IA.
 // Resumo: gerado pela IA (best-effort). Fallback: agenda 100% via IA se o feed cair.
 //
 // GET /api/news            -> usa cache (regenera no máx a cada TTL_MIN minutos)
@@ -74,14 +75,25 @@ async function generate(today, todayBRT) {
   let events = [];
   let source = "forexfactory";
 
-  // Busca em paralelo: agenda (FMP/feed) + resumo (IA) + manchetes (RSS real).
-  const [evtRes, sumRes, headRes] = await Promise.allSettled([
+  // Busca em paralelo: agenda (FMP/feed) + resumo (IA) + manchetes (RSS) +
+  // eventos do Brasil (IA), já que o feed forex não cobre o BR.
+  const [evtRes, sumRes, headRes, brRes] = await Promise.allSettled([
     fetchEvents(todayBRT),
     briefSummary(today),
     fetchRssHeadlines(),
+    fetchBrazilEvents(today),
   ]);
 
   if (evtRes.status === "fulfilled") { events = evtRes.value.events; source = evtRes.value.source; }
+  // Enriquece com o Brasil quando a fonte é o feed forex (que não traz o BR).
+  if (source === "forexfactory" && brRes.status === "fulfilled" && brRes.value.length) {
+    const jaTem = new Set(events.filter(e => e.country === "Brasil").map(e => e.title.toLowerCase()));
+    const novos = brRes.value.filter(e => !jaTem.has(e.title.toLowerCase()));
+    if (novos.length) {
+      events = [...events, ...novos].sort((a, b) => String(a.time).localeCompare(String(b.time)));
+      source = "forexfactory+br";
+    }
+  }
   let summary = sumRes.status === "fulfilled" ? String(sumRes.value || "").trim() : "";
   let headlines = headRes.status === "fulfilled" ? headRes.value : [];
 
@@ -311,4 +323,27 @@ async function aiEvents(today) {
     .filter(e => e.title)
     .sort((a, b) => a.time.localeCompare(b.time));
   return { summary: String(v.summary || ""), events };
+}
+
+// ─── IA: eventos do Brasil (enriquece o feed forex, que não cobre o BR) ───────
+async function fetchBrazilEvents(today) {
+  const prompt =
+    "Hoje e " + today + ". Use a busca na web para o CALENDARIO ECONOMICO do BRASIL de HOJE " +
+    "(indicadores macro brasileiros: IPCA, IGP-M/IGP-10/IGP-DI, IBC-Br, vendas no varejo, PIB, " +
+    "Copom/Selic/ata, balanca comercial, producao industrial, CAGED, PMI, fluxo cambial, etc.).\n" +
+    "Responda SOMENTE JSON valido (sem markdown):\n" +
+    '{"events":[{"time":"09:00","title":"Vendas no Varejo (MoM)","impact":2,"previous":"0,7%","forecast":"-0,6%","actual":""}]}\n' +
+    "Horario de Brasilia no formato HH:MM. 'impact' = 1, 2 ou 3 (alto). Inclua APENAS eventos de HOJE. " +
+    "Preencha 'actual' so se ja divulgado, senao deixe vazio. Se nao houver eventos hoje, retorne events vazio.";
+  const text = await geminiText({ messages: [{ role: "user", content: prompt }], search: true, maxTokens: 1200, temperature: 0.2 });
+  const parsed = extractJSON(text, ['"events"']);
+  if (!parsed) return [];
+  const v = parsed.value || {};
+  return (Array.isArray(v.events) ? v.events : [])
+    .map(e => ({
+      time: String(e.time || ""), country: "Brasil", title: String(e.title || ""),
+      impact: Math.min(Math.max(parseInt(e.impact) || 1, 1), 3),
+      previous: String(e.previous || ""), forecast: String(e.forecast || ""), actual: String(e.actual || ""),
+    }))
+    .filter(e => e.title);
 }
