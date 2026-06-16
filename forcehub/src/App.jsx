@@ -2901,7 +2901,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
 
 // ─── Painel da Turma (consolidado do mentor — staff) ──────────────────────────
 const RANK_KEYS = [["somaR", "R acumulado"], ["winRate", "Acerto"], ["sqn", "SQN"], ["payoff", "Payoff"]];
-const RANK_PERIODS = [["tudo", "Tudo"], ["7d", "7 dias"], ["30d", "30 dias"], ["90d", "90 dias"]];
+const RANK_PERIODS = [["hoje", "Hoje"], ["7d", "7 dias"], ["30d", "30 dias"], ["90d", "90 dias"], ["tudo", "Tudo"]];
 function TurmaScreen({ session }) {
   const [students, setStudents] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2962,7 +2962,7 @@ function TurmaScreen({ session }) {
   // com as operações da janela escolhida (7/30/90 dias) ou tudo. Mantém apenas
   // quem operou na janela, e ordena pela métrica selecionada (maior primeiro).
   const day0 = new Date(); day0.setHours(0, 0, 0, 0); // início do dia de hoje
-  const dias = period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : 0;
+  const dias = period === "hoje" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : 0;
   const periodCut = dias ? day0.getTime() - (dias - 1) * 864e5 : 0; // inclui hoje + (dias-1) anteriores
   const rankRows = (periodCut
     ? rows.map(r => ({ st: r.st, alerts: r.alerts, stat: computeStats(r.ev.filter(e => e.t >= periodCut)) }))
@@ -3033,7 +3033,7 @@ function TurmaScreen({ session }) {
         <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Ranking da turma</div>
-            <div style={{ fontSize: 12, color: T.dim }}>{ranked.length} {ranked.length === 1 ? "aluno" : "alunos"} · {period === "tudo" ? "histórico completo" : "últimos " + periodLabel.toLowerCase()}</div>
+            <div style={{ fontSize: 12, color: T.dim }}>{ranked.length} {ranked.length === 1 ? "aluno" : "alunos"} · {period === "tudo" ? "histórico completo" : period === "hoje" ? "somente hoje" : "últimos " + periodLabel.toLowerCase()}</div>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: 11, color: T.dim }}>PERÍODO</span>
@@ -3044,7 +3044,7 @@ function TurmaScreen({ session }) {
           </div>
         </div>
         {ranked.length === 0
-          ? <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum aluno operou {period === "tudo" ? "ainda" : "nos últimos " + periodLabel.toLowerCase()}.</div>
+          ? <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum aluno operou {period === "tudo" ? "ainda" : period === "hoje" ? "hoje" : "nos últimos " + periodLabel.toLowerCase()}.</div>
           : <>
         <div className="fh-scroll-x">
           <div style={{ minWidth: 760 }}>
