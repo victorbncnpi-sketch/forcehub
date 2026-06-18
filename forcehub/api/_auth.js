@@ -82,7 +82,7 @@ export function sessionCan(s, cap) {
 }
 
 export function publicUser(u) {
-  return u ? { user: u.user, name: u.name, email: u.email || null, role: u.role, expiry: u.expiry || null, perms: effectivePerms(u) } : null;
+  return u ? { user: u.user, name: u.name, email: u.email || null, phone: u.phone || null, role: u.role, expiry: u.expiry || null, perms: effectivePerms(u) } : null;
 }
 export function isExpired(u) {
   if (!u || !u.expiry) return false;
@@ -171,4 +171,10 @@ export async function destroySession(req) {
   const redis = getRedis();
   const token = parseCookies(req)[COOKIE];
   if (redis && token) await redis.del(SESS_PREFIX + token);
+}
+// Regrava o payload público da sessão atual (após o usuário editar o próprio
+// perfil), mantendo o mesmo token/cookie.
+export async function refreshSession(token, user) {
+  const redis = getRedis();
+  if (redis && token) await redis.set(SESS_PREFIX + token, publicUser(user), { ex: SESSION_TTL });
 }

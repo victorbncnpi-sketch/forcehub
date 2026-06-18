@@ -219,8 +219,9 @@ function firstAllowed(session) {
   return n ? n.key : "panorama";
 }
 
-function Shell({ session, active, onNavigate, onLogout, children }) {
+function Shell({ session, active, onNavigate, onLogout, onUpdateSession, children }) {
   const [time, setTime] = useState(new Date());
+  const [profileOpen, setProfileOpen] = useState(false);
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
   const roleLabel = ROLE_LABEL[session?.role] || "Cliente";
   const roleTone = session?.role === "superadmin" ? "gold" : session?.role === "moderator" ? "blue" : null;
@@ -241,15 +242,27 @@ function Shell({ session, active, onNavigate, onLogout, children }) {
           ))}
         </nav>
         <div style={{ padding: 14, borderTop: "1px solid " + T.line }}>
-          <div className="fh-side-detail" style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 13, color: T.text, fontWeight: 600 }}>{session?.name}</div>
-            {roleTone
-              ? <Badge tone={roleTone} style={{ marginTop: 6 }}>● {roleLabel.toUpperCase()}</Badge>
-              : session?.expiry && <div style={{ fontSize: 11, color: T.dim, marginTop: 4 }}>acesso até {new Date(session.expiry).toLocaleDateString("pt-BR")}</div>}
+          <div className="fh-side-detail" role="button" tabIndex={0} title="Editar meu perfil"
+            onClick={() => setProfileOpen(true)}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setProfileOpen(true); } }}
+            style={{ marginBottom: 10, cursor: "pointer", borderRadius: 8, padding: "8px 10px", margin: "-8px -10px 4px", transition: "background .12s", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+            onMouseEnter={e => { e.currentTarget.style.background = T.line; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: T.text, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{session?.name}</div>
+              {roleTone
+                ? <Badge tone={roleTone} style={{ marginTop: 6 }}>● {roleLabel.toUpperCase()}</Badge>
+                : session?.expiry && <div style={{ fontSize: 11, color: T.dim, marginTop: 4 }}>acesso até {new Date(session.expiry).toLocaleDateString("pt-BR")}</div>}
+            </div>
+            <Icon name="edit" size={15} color={T.dim} />
           </div>
           <Button variant="ghost" size="sm" onClick={onLogout} style={{ width: "100%" }}>Sair</Button>
         </div>
       </aside>
+      {profileOpen && (
+        <ProfileModal session={session} onClose={() => setProfileOpen(false)}
+          onSaved={(u) => { if (onUpdateSession) onUpdateSession(u); }} />
+      )}
       <div className="fh-main">
         <header style={{ height: 57, flexShrink: 0, borderBottom: "1px solid " + T.line, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px" }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: T.text, letterSpacing: 0.2 }}>{cur?.title}</div>
@@ -258,6 +271,89 @@ function Shell({ session, active, onNavigate, onLogout, children }) {
         <div className="fh-body">{children}</div>
       </div>
     </div>
+  );
+}
+
+// ─── Modal de perfil (o próprio usuário edita seus dados e senha) ─────────────
+function ProfileModal({ session, onClose, onSaved }) {
+  const isSuper = session?.role === "superadmin";
+  const [form, setForm] = useState({
+    name: session?.name || "", login: session?.user || "",
+    email: session?.email || "", phone: session?.phone || "",
+    currentPass: "", newPass: "", newPass2: "",
+  });
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [ok, setOk] = useState(false);
+
+  const save = async () => {
+    setError("");
+    if ((form.name || "").trim().length < 2) return setError("Informe um nome válido.");
+    const wantsPass = form.newPass || form.newPass2 || form.currentPass;
+    if (form.newPass || form.newPass2) {
+      if (form.newPass.length < 6) return setError("A nova senha precisa ter ao menos 6 caracteres.");
+      if (form.newPass !== form.newPass2) return setError("A confirmação da nova senha não confere.");
+      if (!form.currentPass) return setError("Informe a senha atual para alterá-la.");
+    }
+    const payload = { action: "profile", name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() };
+    if (!isSuper) payload.login = form.login.trim().toLowerCase();
+    if (wantsPass) { payload.currentPass = form.currentPass; payload.newPass = form.newPass; }
+    setSaving(true);
+    try {
+      const j = await api.post("/api/auth", payload);
+      if (!j.ok) { setError(j.error || "Não foi possível salvar."); return; }
+      setOk(true);
+      onSaved(j.user);
+      setTimeout(onClose, 700);
+    } catch (e) {
+      setError(e.message || "Falha de conexão.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title="Meu perfil" onClose={onClose} width={460}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="Nome">
+          <Input value={form.name} onChange={set("name")} placeholder="Seu nome" />
+        </Field>
+        <Field label="Login" hint={isSuper ? "O login do super admin não pode ser alterado." : "Letras minúsculas, números, ponto, hífen ou underscore."}>
+          <Input value={form.login} disabled={isSuper} onChange={set("login")} placeholder="ex: joao.silva" mono />
+        </Field>
+        <div style={{ display: "flex", gap: 12 }}>
+          <Field label="E-mail (opcional)" style={{ flex: 1 }}>
+            <Input type="email" value={form.email} onChange={set("email")} placeholder="voce@email.com" />
+          </Field>
+          <Field label="Telefone (opcional)" style={{ flex: 1 }}>
+            <Input value={form.phone} onChange={set("phone")} placeholder="(11) 99999-9999" />
+          </Field>
+        </div>
+
+        <div style={{ borderTop: "1px solid " + T.line, paddingTop: 12, marginTop: 2 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 10 }}>Trocar senha <span style={{ fontWeight: 400, color: T.dim }}>(opcional)</span></div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Field label="Senha atual">
+              <Input type="password" value={form.currentPass} onChange={set("currentPass")} placeholder="••••••••" />
+            </Field>
+            <div style={{ display: "flex", gap: 12 }}>
+              <Field label="Nova senha" style={{ flex: 1 }}>
+                <Input type="password" value={form.newPass} onChange={set("newPass")} placeholder="mín. 6 caracteres" />
+              </Field>
+              <Field label="Confirmar nova" style={{ flex: 1 }}>
+                <Input type="password" value={form.newPass2} onChange={set("newPass2")} placeholder="repita a senha" />
+              </Field>
+            </div>
+          </div>
+        </div>
+
+        {error && <div style={{ fontSize: 13, color: T.red }}>⚠ {error}</div>}
+        {ok && <div style={{ fontSize: 13, color: T.green }}>✓ Perfil atualizado.</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={save} disabled={saving || ok}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -3209,7 +3305,7 @@ export default function App() {
   return (
     <>
       <GlobalStyle />
-      <Shell session={session} active={current} onNavigate={setActive} onLogout={logout}>
+      <Shell session={session} active={current} onNavigate={setActive} onLogout={logout} onUpdateSession={setSession}>
         {current === "panorama" && <PanoramaScreen session={session} />}
         {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} />}
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
