@@ -819,6 +819,9 @@ function numBR(v) {
   const n = parseFloat(s);
   return isNaN(n) ? null : n;
 }
+// Formata um preço com segurança: "—" quando o valor é nulo/inválido (evita
+// quebrar a tela ao renderizar recomendações/posições com preço ausente).
+const px = (v, dp = 2) => (typeof v === "number" && isFinite(v)) ? v.toFixed(dp) : "—";
 
 // Direção de uma recomendação/posição. Compat: se não houver campo `direcao`,
 // deduz por alvo vs entrada (alvo abaixo da entrada = venda/short).
@@ -936,9 +939,9 @@ function PosicaoRow({ p, cot, onFechar, onRemove }) {
         <div style={{ fontSize: 11, color: T.dim }}>{p.dataEntrada}</div>
       </div>
       <div style={{ fontSize: 13, color: T.mut, fontFamily: T.sans }}>{p.nome || "—"}</div>
-      <div style={{ fontSize: 13, color: T.text }}>R$ {p.entrada.toFixed(2)}</div>
-      <div style={{ fontSize: 13, color: T.green }}>R$ {p.alvo.toFixed(2)}</div>
-      <div style={{ fontSize: 13, color: T.red }}>R$ {p.stop.toFixed(2)}</div>
+      <div style={{ fontSize: 13, color: T.text }}>R$ {px(p.entrada)}</div>
+      <div style={{ fontSize: 13, color: T.green }}>R$ {px(p.alvo)}</div>
+      <div style={{ fontSize: 13, color: T.red }}>R$ {px(p.stop)}</div>
       <div style={{ fontSize: 13, color: aguardando ? T.gold : p.precoSaida ? T.gold : (live != null ? T.mut : T.dim), display: "flex", alignItems: "center", gap: 5 }}>
         {live != null && <span title={cot.stale ? "último valor conhecido" : "ao vivo (delay ~15min)"} style={{ width: 6, height: 6, borderRadius: "50%", background: cot.stale ? T.dim : T.green, flexShrink: 0 }} />}
         {aguardando ? "⏳" : p.precoSaida ? "R$ " + p.precoSaida.toFixed(2) : (live != null ? "R$ " + cot.price.toFixed(2) : "—")}
@@ -1210,6 +1213,12 @@ function CarteiraScreen({ canWrite }) {
     if (alvo && alvo.hasImage) { api.post("/api/carteira?img=" + id, { data: null }).catch(() => {}); }
   };
   const addFromScan = (op) => {
+    // Não publica recomendação com preços inválidos (evita persistir entrada/
+    // alvo/stop nulos, que quebravam a renderização da carteira).
+    if (![op.entrada, op.alvo, op.stop].every(v => typeof v === "number" && isFinite(v))) {
+      setScanError("Esta oportunidade veio sem preços válidos (entrada/alvo/stop). Edite-a manualmente ou busque novamente.");
+      return;
+    }
     const nova = {
       id: idRef.current++, ticker: op.ticker, nome: op.nome, direcao: tradeDir(op), entrada: op.entrada, alvo: op.alvo, stop: op.stop,
       qty: 1, obs: op.setup + " | " + op.racional, addedAt: new Date().toLocaleDateString("pt-BR"), ai: true,
@@ -1388,7 +1397,7 @@ function CarteiraScreen({ canWrite }) {
                       </div>
                     </div>
                     <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                      {[["ENTRADA", "R$ " + a.entrada.toFixed(2), T.text], ["ALVO +" + pot + "%", "R$ " + a.alvo.toFixed(2), T.green], ["STOP " + sp + "%", "R$ " + a.stop.toFixed(2), T.red]].map(([l, v, c]) => (
+                      {[["ENTRADA", "R$ " + px(a.entrada), T.text], ["ALVO +" + pot + "%", "R$ " + px(a.alvo), T.green], ["STOP " + sp + "%", "R$ " + px(a.stop), T.red]].map(([l, v, c]) => (
                         <div key={l} style={{ background: T.inset, borderRadius: 8, padding: "10px 12px", borderLeft: "3px solid " + c }}>
                           <div style={{ fontSize: 11, color: T.dim, marginBottom: 5 }}>{l}</div>
                           <div style={{ fontSize: 16, fontWeight: 700, color: c, fontFamily: T.mono }}>{v}</div>
@@ -1487,7 +1496,7 @@ function CarteiraScreen({ canWrite }) {
                             {a.ticker}{a.fechadoAuto ? (a.motivoFechamento === "alvo" ? " 🎯" : " 🛑") : ""}
                           </div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: venda ? T.red : T.green }}>{venda ? "▼ VENDA" : "▲ COMPRA"}</div>
-                          <div style={{ fontSize: 13, color: T.mut }}>R$ {a.entrada.toFixed(2)} → R$ {a.precoSaida != null ? a.precoSaida.toFixed(2) : "—"}</div>
+                          <div style={{ fontSize: 13, color: T.mut }}>R$ {px(a.entrada)} → R$ {a.precoSaida != null ? a.precoSaida.toFixed(2) : "—"}</div>
                           <div style={{ fontSize: 15, fontWeight: 700, color: a.resultado >= 0 ? T.green : T.red }}>{(a.resultado >= 0 ? "+" : "") + a.resultado.toFixed(2)}%</div>
                           <div style={{ fontSize: 13, color: rrColor(rr) }}>1:{rr.toFixed(1)}</div>
                           <div style={{ fontSize: 12, color: T.dim }}>{a.dataSaida || "—"}</div>
