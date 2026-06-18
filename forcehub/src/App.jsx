@@ -2710,8 +2710,12 @@ function TradesScreen({ session }) {
     try {
       const buf = await file.arrayBuffer();
       let text;
-      try { text = new TextDecoder("windows-1252").decode(buf); }
-      catch (e2) { text = new TextDecoder("iso-8859-1").decode(buf); }
+      // Detecta a codificação: os relatórios do Profit variam — o de "Operações"
+      // costuma vir em latin-1/windows-1252; o "Relatório de Performance" vem em
+      // UTF-8. Tenta UTF-8 estrito; se os bytes não forem UTF-8 válido, é latin-1.
+      // (Ler UTF-8 como latin-1 corrompe acentos e quebra a detecção de colunas.)
+      try { text = new TextDecoder("utf-8", { fatal: true }).decode(buf); }
+      catch (e2) { text = new TextDecoder("windows-1252").decode(buf); }
       const res = parseProfitCsv(text, valorR);
       if (res.error) { setImportErr(res.error); return; }
       const seen = new Set(trades.map(t => t.ext).filter(Boolean));
