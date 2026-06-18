@@ -2490,7 +2490,7 @@ function TradesScreen({ session }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [showForm, setShowForm] = useState(false);
-  const [editId, setEditId] = useState(null); // null = novo; id = editando esse trade
+  const [editing, setEditing] = useState(null); // null | { kind:"manual", id } | { kind:"conselheiro", idx }
   const [page, setPage] = useState(1);
   const idRef = useRef(1);
   const today = new Date().toISOString().slice(0, 10);
@@ -2528,38 +2528,63 @@ function TradesScreen({ session }) {
     setVrStatus(ok ? "saved" : "");
     if (ok) setTimeout(() => setVrStatus(""), 1800);
   };
-  const addTrade = () => {
+  const addTrade = async () => {
     const valor = parseFloat(String(form.valor).replace(",", "."));
     if (isNaN(valor)) { setErr("Informe o resultado da operação."); return; }
     setErr("");
     let r, fin;
     if (form.unidade === "R") { r = valor; fin = valorR ? +(valor * valorR).toFixed(2) : null; }
     else { fin = valor; r = valorR ? +(valor / valorR).toFixed(3) : null; }
-    const base = { data: form.data, ativo: (form.ativo || "").trim().toUpperCase() || null, direcao: form.direcao, r, fin, setup: (form.setup || "").trim(), notas: (form.notas || "").trim() };
-    if (editId != null) {
-      // Edição: preserva id e demais campos (ex.: ext de importação) do trade.
-      persist(trades.map(t => t.id === editId ? { ...t, ...base } : t));
-      setEditId(null);
+
+    if (editing && editing.kind === "conselheiro") {
+      // Edita a anotação do Conselheiro: só data, resultado (R$) e reflexão; os
+      // demais campos não existem nesse registro. Reenvia o diário (api/conselheiro).
+      const novo = diario.map((d, i) => i === editing.idx ? { ...d, data: form.data, resultado: fin, reflexao: (form.notas || "").trim() } : d);
+      setDiario(novo);
+      try { await api.post("/api/conselheiro?user=" + encodeURIComponent(userId || "anon"), { diario: novo }); }
+      catch (e) { setErr("Falha ao salvar: " + e.message); return; }
     } else {
-      persist([...trades, { id: idRef.current++, ...base }]);
+      const base = { data: form.data, ativo: (form.ativo || "").trim().toUpperCase() || null, direcao: form.direcao, r, fin, setup: (form.setup || "").trim(), notas: (form.notas || "").trim() };
+      if (editing && editing.kind === "manual") {
+        // Edição: preserva id e demais campos (ex.: ext de importação) do trade.
+        persist(trades.map(t => t.id === editing.id ? { ...t, ...base } : t));
+      } else {
+        persist([...trades, { id: idRef.current++, ...base }]);
+      }
     }
+    setEditing(null);
     setForm({ ...baseForm, data: form.data, ativo: form.ativo, direcao: form.direcao, unidade: form.unidade });
     setShowForm(false);
   };
-  // Abre o formulário preenchido para editar um trade manual (inclui importados).
+  // Abre o formulário preenchido para editar — trade manual (inclui importados)
+  // ou anotação do Conselheiro (só data/resultado/reflexão).
   const openEdit = (e) => {
-    const t = trades.find(x => x.id === e.srcId);
-    if (!t) return;
-    const emR = t.r != null; // mostra em R quando há R-múltiplo; senão em R$
-    setEditId(t.id); setErr("");
-    setForm({
-      data: t.data, ativo: t.ativo || "", direcao: t.direcao || "COMPRA",
-      unidade: emR ? "R" : "R$", valor: emR ? String(t.r) : (t.fin != null ? String(t.fin) : ""),
-      setup: t.setup || "", notas: t.notas || "",
-    });
-    setShowForm(true);
+    setErr("");
+    if (e.fonte === "manual") {
+      const t = trades.find(x => x.id === e.srcId);
+      if (!t) return;
+      const emR = t.r != null; // mostra em R quando há R-múltiplo; senão em R$
+      setEditing({ kind: "manual", id: t.id });
+      setForm({
+        data: t.data, ativo: t.ativo || "", direcao: t.direcao || "COMPRA",
+        unidade: emR ? "R" : "R$", valor: emR ? String(t.r) : (t.fin != null ? String(t.fin) : ""),
+        setup: t.setup || "", notas: t.notas || "",
+      });
+      setShowForm(true);
+    } else if (e.fonte === "conselheiro" && typeof e.srcIdx === "number") {
+      const d = diario[e.srcIdx] || {};
+      const raw = String(d.data || "");
+      const dataISO = raw.includes("/") ? raw.split("/").reverse().join("-") : raw.slice(0, 10);
+      setEditing({ kind: "conselheiro", idx: e.srcIdx });
+      setForm({
+        data: dataISO, ativo: "", direcao: "COMPRA",
+        unidade: "R$", valor: e.fin != null ? String(e.fin) : "",
+        setup: "", notas: e.notas || "",
+      });
+      setShowForm(true);
+    }
   };
-  const closeForm = () => { setShowForm(false); setEditId(null); };
+  const closeForm = () => { setShowForm(false); setEditing(null); };
   const removeTrade = (id) => persist(trades.filter(t => t.id !== id));
   // Exclui uma entrada registrada pelo Conselheiro (reenvia o diário filtrado —
   // mesmo padrão de gravação usado na tela do Conselheiro).
@@ -2646,7 +2671,7 @@ function TradesScreen({ session }) {
           </Field>
           <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: "none" }} />
           <Button variant="ghost" onClick={() => { setImportErr(""); fileRef.current && fileRef.current.click(); }} title="Importar o relatório de Operações exportado do Profit (.csv)"><Icon name="upload" size={14} /> Importar Profit</Button>
-          <Button variant="gold" onClick={() => { setErr(""); if (showForm) { closeForm(); } else { setEditId(null); setForm(f => ({ ...baseForm, data: f.data, ativo: f.ativo, direcao: f.direcao, unidade: f.unidade })); setShowForm(true); } }}>{showForm ? "× Fechar" : "+ Novo trade"}</Button>
+          <Button variant="gold" onClick={() => { setErr(""); if (showForm) { closeForm(); } else { setEditing(null); setForm(f => ({ ...baseForm, data: f.data, ativo: f.ativo, direcao: f.direcao, unidade: f.unidade })); setShowForm(true); } }}>{showForm ? "× Fechar" : "+ Novo trade"}</Button>
         </div>
       </Card>
 
@@ -2685,9 +2710,10 @@ function TradesScreen({ session }) {
       {/* Formulário */}
       {showForm && (
         <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: editId != null ? T.gold : T.text }}>{editId != null ? "Editar operação" : "Nova operação"}</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: editing ? T.gold : T.text }}>{editing ? (editing.kind === "conselheiro" ? "Editar anotação do Conselheiro" : "Editar operação") : "Nova operação"}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
             <Field label="Data"><Input type="date" {...inp("data")} /></Field>
+            {editing?.kind !== "conselheiro" && <>
             <Field label="Ativo">
               <Input list="fh-ativos" {...inp("ativo")} placeholder="WIN" />
               <datalist id="fh-ativos">{ATIVOS_SUG.map(a => <option key={a} value={a} />)}</datalist>
@@ -2702,6 +2728,7 @@ function TradesScreen({ session }) {
                 ))}
               </div>
             </Field>
+            </>}
             <Field label="Resultado">
               <div style={{ display: "flex", gap: 6 }}>
                 <Input mono type="number" step="0.01" {...inp("valor")} placeholder={form.unidade === "R" ? "ex.: 1.5 ou -1" : "ex.: 375 ou -250"} style={{ flex: 1 }} />
@@ -2709,12 +2736,12 @@ function TradesScreen({ session }) {
                   style={{ width: 48, borderRadius: 8, fontSize: 13, fontWeight: 700, border: "1px solid " + T.lineGold, background: T.goldSoft, color: T.gold }}>{form.unidade}</button>
               </div>
             </Field>
-            <Field label="Setup / estratégia"><Input {...inp("setup")} placeholder="ex.: rompimento, pullback" /></Field>
-            <Field label="Notas"><Input {...inp("notas")} placeholder="opcional" /></Field>
+            {editing?.kind !== "conselheiro" && <Field label="Setup / estratégia"><Input {...inp("setup")} placeholder="ex.: rompimento, pullback" /></Field>}
+            <Field label={editing?.kind === "conselheiro" ? "Reflexão / nota" : "Notas"}><Input {...inp("notas")} placeholder="opcional" /></Field>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Button variant="ghost" size="sm" onClick={closeForm}>Cancelar</Button>
-            <Button size="sm" onClick={addTrade}>{editId != null ? "Salvar alterações" : "Registrar operação"}</Button>
+            <Button size="sm" onClick={addTrade}>{editing ? "Salvar alterações" : "Registrar operação"}</Button>
           </div>
         </Card>
       )}
@@ -2745,11 +2772,11 @@ function TradesScreen({ session }) {
                     <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: e.r == null ? T.dim : signTone(e.r) }}>{e.r == null ? "—" : fmtR(e.r)}</div>
                     <div style={{ textAlign: "right", fontSize: 13, color: e.fin == null ? T.dim : signTone(e.fin) }}>{e.fin == null ? "—" : fmtBRL(e.fin)}</div>
                     <div style={{ position: "sticky", right: 0, background: T.panel, display: "flex", justifyContent: "flex-end", gap: 5 }}>
-                      {e.fonte === "manual" && (
-                        <button className="fh-btn" onClick={() => openEdit(e)} title="Editar operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.gold, borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="edit" size={14} /></button>
-                      )}
                       {(e.fonte === "manual" || e.fonte === "conselheiro")
-                        ? <button className="fh-btn" onClick={() => askRemove(e)} title="Excluir operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.red, borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="trash" size={15} /></button>
+                        ? <>
+                            <button className="fh-btn" onClick={() => openEdit(e)} title="Editar operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.gold, borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="edit" size={14} /></button>
+                            <button className="fh-btn" onClick={() => askRemove(e)} title="Excluir operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.red, borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="trash" size={15} /></button>
+                          </>
                         : <span title="Registrado automaticamente" style={{ fontSize: 14, color: T.dim }}>🔒</span>}
                     </div>
                   </div>
