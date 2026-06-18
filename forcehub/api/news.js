@@ -10,7 +10,13 @@
 import { getRedis } from "./_redis";
 import { geminiText, extractJSON } from "./_ai";
 
-const TTL_MIN = 15;
+// Frescor geral do payload (agenda/manchetes — fontes gratuitas, sem IA).
+const TTL_MIN = Number(process.env.NEWS_TTL_MIN) || 30;
+// Frescor do conteúdo gerado por IA (resumo do dia + eventos do Brasil). Muda
+// pouco ao longo do pregão e é o que consome cota de IA, então mantemos por
+// muito mais tempo — assim sobra limite de IA para o Conselheiro. Ajustável por
+// env (NEWS_AI_TTL_MIN). Padrão: 6 horas.
+const AI_TTL_MIN = Number(process.env.NEWS_AI_TTL_MIN) || 360;
 const FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 const COUNTRIES = { USD: "EUA", BRL: "Brasil", EUR: "Zona do Euro", GBP: "Reino Unido", CNY: "China", JPY: "Japão", CAD: "Canadá", AUD: "Austrália" };
 const IMPACT = { High: 3, Medium: 2, Low: 1, Holiday: 1 };
@@ -52,13 +58,14 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (!refresh && redis) {
-      const cached = await redis.get(cacheKey);
-      if (cached && cached.generatedAt && (Date.now() - cached.generatedAt) < TTL_MIN * 60 * 1000) {
-        return res.status(200).json({ ok: true, cached: true, ...cached });
-      }
+    let prev = null;
+    if (redis) { try { prev = await redis.get(cacheKey); } catch (_) {} }
+    if (!refresh && prev && prev.generatedAt && (Date.now() - prev.generatedAt) < TTL_MIN * 60 * 1000) {
+      return res.status(200).json({ ok: true, cached: true, ...prev });
     }
-    const data = await generate(today, todayBRT);
+    // Mesmo regenerando o payload, reaproveita o conteúdo de IA do cache
+    // anterior enquanto estiver dentro de AI_TTL_MIN (a menos de ?refresh=1).
+    const data = await generate(today, todayBRT, refresh ? null : prev);
     const payload = { generatedAt: Date.now(), date: today, ...data };
     if (redis) { try { await redis.set(cacheKey, payload, { ex: 60 * 60 * 24 }); } catch (e) {} }
     return res.status(200).json({ ok: true, cached: false, ...payload });
@@ -71,24 +78,34 @@ export default async function handler(req, res) {
   }
 }
 
-async function generate(today, todayBRT) {
+async function generate(today, todayBRT, prev) {
   let events = [];
   let source = "forexfactory";
 
+  // Conteúdo de IA (resumo do dia + eventos do Brasil): caro e estável ao longo
+  // do pregão. Reaproveita o do cache anterior enquanto estiver dentro de
+  // AI_TTL_MIN, mesmo quando renovamos a agenda/manchetes (fontes gratuitas).
+  const aiFresh = !!(prev && prev.aiAt && (Date.now() - prev.aiAt) < AI_TTL_MIN * 60 * 1000);
+  const keepSummary = aiFresh && prev.summary ? String(prev.summary) : null;
+  const keepBr = aiFresh && Array.isArray(prev.brEvents) ? prev.brEvents : null;
+
   // Busca em paralelo: agenda (FMP/feed) + resumo (IA) + manchetes (RSS) +
-  // eventos do Brasil (IA), já que o feed forex não cobre o BR.
+  // eventos do Brasil (IA), já que o feed forex não cobre o BR. As partes de IA
+  // são puladas (Promise.resolve) quando há conteúdo recente para reaproveitar.
   const [evtRes, sumRes, headRes, brRes] = await Promise.allSettled([
     fetchEvents(todayBRT),
-    briefSummary(today),
+    keepSummary != null ? Promise.resolve(keepSummary) : briefSummary(today),
     fetchRssHeadlines(),
-    fetchBrazilEvents(today),
+    keepBr != null ? Promise.resolve(keepBr) : fetchBrazilEvents(today),
   ]);
 
   if (evtRes.status === "fulfilled") { events = evtRes.value.events; source = evtRes.value.source; }
+  const brOk = brRes.status === "fulfilled";
+  const brEvents = brOk ? brRes.value : (keepBr || []);
   // Enriquece com o Brasil quando a fonte é o feed forex (que não traz o BR).
-  if (source === "forexfactory" && brRes.status === "fulfilled" && brRes.value.length) {
+  if (source === "forexfactory" && brEvents.length) {
     const jaTem = new Set(events.filter(e => e.country === "Brasil").map(e => e.title.toLowerCase()));
-    const novos = brRes.value.filter(e => !jaTem.has(e.title.toLowerCase()));
+    const novos = brEvents.filter(e => !jaTem.has(e.title.toLowerCase()));
     if (novos.length) {
       events = [...events, ...novos].sort((a, b) => String(a.time).localeCompare(String(b.time)));
       source = "forexfactory+br";
@@ -113,7 +130,20 @@ async function generate(today, todayBRT) {
       if (!summary && !headlines.length) throw e;
     }
   }
-  return { summary, events, headlines, source };
+
+  // Carimbo da janela de IA: preserva quando tudo foi reaproveitado; reinicia
+  // quando geramos conteúdo de IA bom agora; não estende se a geração falhou
+  // (assim tenta de novo no próximo ciclo em vez de cachear vazio).
+  const reusedSummary = keepSummary != null;
+  const reusedBr = keepBr != null;
+  const sumGood = reusedSummary || !!summary;
+  const brGood = reusedBr || brOk;
+  let aiAt;
+  if (reusedSummary && reusedBr) aiAt = prev.aiAt;
+  else if (sumGood && brGood) aiAt = Date.now();
+  else aiAt = (prev && prev.aiAt) || 0;
+
+  return { summary, events, headlines, source, brEvents, aiAt };
 }
 
 // Fonte dos eventos: ForexFactory (gratuito). O calendário do FMP é pago
