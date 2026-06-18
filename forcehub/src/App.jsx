@@ -2269,33 +2269,57 @@ function parseProfitCsv(text, valorR) {
   }
   if (hi < 0) return { error: "Cabeçalho não reconhecido — confirme que é o relatório de Operações exportado do Profit (.csv)." };
 
-  const head = lines[hi].split(";").map(deburr);
-  const col = (name, fallback) => { const k = head.indexOf(name); return k >= 0 ? k : fallback; };
-  const iAtivo = col("ativo", 0);
-  const iAbert = col("abertura", 1);
-  const iLado = col("lado", 6);
-  let iRes = head.findIndex(h => h.startsWith("res. operacao") && !h.includes("%"));
-  if (iRes < 0) iRes = 13; // posição fixa no layout do Profit
+  const raw = lines[hi].split(";");
+  const head = raw.map(deburr);
+  const find = (pred) => head.findIndex(pred);
+  const iAtivo = Math.max(0, find(h => h === "ativo"));
+  const iAbert = (() => { const k = find(h => h === "abertura" || h.startsWith("abertura") || h.startsWith("data")); return k >= 0 ? k : 1; })();
+
+  // Resultado em R$: tenta vários nomes por prioridade, SEMPRE excluindo colunas
+  // de pontos/percentual ("%", "pts", "ponto"). Sem fallback de índice fixo —
+  // o layout do Profit é configurável, então adivinhar índice causava confusão
+  // entre o financeiro e os pontos.
+  const moneyOk = (h) => !h.includes("%") && !h.includes("pts") && !h.includes("ponto");
+  const moneyTries = [
+    h => h === "res. operacao",
+    h => h.startsWith("res. operacao") && moneyOk(h),
+    h => h === "res. da operacao" || h === "resultado operacao" || h === "resultado da operacao",
+    h => h === "res. intervalo bruto",
+    h => h.startsWith("res. intervalo") && moneyOk(h),
+    h => /(^|\s)(resultado|res\. financeiro|res\. liquido|lucro)/.test(h) && moneyOk(h),
+  ];
+  let iRes = -1;
+  for (const p of moneyTries) { iRes = find(p); if (iRes >= 0) break; }
+  if (iRes < 0) return { error: 'Não encontrei a coluna de resultado em R$ (ex.: "Res. Operação"). Confira se ela está incluída na exportação do Profit — não exporte apenas a coluna de pontos/%.' };
+  const resCol = (raw[iRes] || head[iRes] || "").trim();
+
+  // Lado: coluna "Lado" ou, na falta dela, extrai C/V de uma coluna "Qtd"
+  // combinada (alguns layouts trazem "6 C" / "3 V" num único campo).
+  const iLado = find(h => h === "lado");
+  const iQtd = find(h => h.startsWith("qtd") || h === "quantidade");
+  const sideOf = (c) => {
+    if (iLado >= 0) { const v = (c[iLado] || "").trim().toUpperCase(); if (v.startsWith("C")) return "COMPRA"; if (v.startsWith("V")) return "VENDA"; }
+    if (iQtd >= 0) { const m = (c[iQtd] || "").trim().toUpperCase().match(/([CV])\s*$/); if (m) return m[1] === "C" ? "COMPRA" : "VENDA"; }
+    return null;
+  };
 
   const trades = [];
   let invalid = 0;
   for (let i = hi + 1; i < lines.length; i++) {
     if (!lines[i] || !lines[i].trim()) continue;
     const c = lines[i].split(";");
-    if (c.length <= iRes) { invalid++; continue; }
+    if (c.length <= iRes || c.length <= iAbert) { invalid++; continue; }
     const dt = brDateTime(c[iAbert]);
     const fin = brNum(c[iRes]);
     const contrato = (c[iAtivo] || "").trim().toUpperCase();
-    const lado = (c[iLado] || "").trim().toUpperCase();
     if (!dt || fin == null || !contrato) { invalid++; continue; }
-    const direcao = lado.startsWith("C") ? "COMPRA" : lado.startsWith("V") ? "VENDA" : null;
     trades.push({
-      data: dt.data, ativo: rootAtivo(contrato), direcao,
+      data: dt.data, ativo: rootAtivo(contrato), direcao: sideOf(c),
       r: null, fin, setup: "", notas: contrato,
       ext: `profit:${contrato}:${dt.data} ${dt.hora}:${fin}`,
     });
   }
-  return { trades, invalid };
+  return { trades, invalid, resCol };
 }
 
 // Tabela de interpretação do SQN (System Quality Number) — como na planilha.
@@ -2466,6 +2490,7 @@ function TradesScreen({ session }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null); // null = novo; id = editando esse trade
   const [page, setPage] = useState(1);
   const idRef = useRef(1);
   const today = new Date().toISOString().slice(0, 10);
@@ -2510,11 +2535,31 @@ function TradesScreen({ session }) {
     let r, fin;
     if (form.unidade === "R") { r = valor; fin = valorR ? +(valor * valorR).toFixed(2) : null; }
     else { fin = valor; r = valorR ? +(valor / valorR).toFixed(3) : null; }
-    const nova = { id: idRef.current++, data: form.data, ativo: (form.ativo || "").trim().toUpperCase() || null, direcao: form.direcao, r, fin, setup: (form.setup || "").trim(), notas: (form.notas || "").trim() };
-    persist([...trades, nova]);
+    const base = { data: form.data, ativo: (form.ativo || "").trim().toUpperCase() || null, direcao: form.direcao, r, fin, setup: (form.setup || "").trim(), notas: (form.notas || "").trim() };
+    if (editId != null) {
+      // Edição: preserva id e demais campos (ex.: ext de importação) do trade.
+      persist(trades.map(t => t.id === editId ? { ...t, ...base } : t));
+      setEditId(null);
+    } else {
+      persist([...trades, { id: idRef.current++, ...base }]);
+    }
     setForm({ ...baseForm, data: form.data, ativo: form.ativo, direcao: form.direcao, unidade: form.unidade });
     setShowForm(false);
   };
+  // Abre o formulário preenchido para editar um trade manual (inclui importados).
+  const openEdit = (e) => {
+    const t = trades.find(x => x.id === e.srcId);
+    if (!t) return;
+    const emR = t.r != null; // mostra em R quando há R-múltiplo; senão em R$
+    setEditId(t.id); setErr("");
+    setForm({
+      data: t.data, ativo: t.ativo || "", direcao: t.direcao || "COMPRA",
+      unidade: emR ? "R" : "R$", valor: emR ? String(t.r) : (t.fin != null ? String(t.fin) : ""),
+      setup: t.setup || "", notas: t.notas || "",
+    });
+    setShowForm(true);
+  };
+  const closeForm = () => { setShowForm(false); setEditId(null); };
   const removeTrade = (id) => persist(trades.filter(t => t.id !== id));
   // Exclui uma entrada registrada pelo Conselheiro (reenvia o diário filtrado —
   // mesmo padrão de gravação usado na tela do Conselheiro).
@@ -2558,7 +2603,7 @@ function TradesScreen({ session }) {
       }
       const sumFin = novos.reduce((s, t) => s + (t.fin || 0), 0);
       const ds = novos.map(t => t.data).sort();
-      setPreview({ novos, dupes, invalid: res.invalid, total: res.trades.length, sumFin, minD: ds[0], maxD: ds[ds.length - 1] });
+      setPreview({ novos, dupes, invalid: res.invalid, total: res.trades.length, sumFin, minD: ds[0], maxD: ds[ds.length - 1], resCol: res.resCol });
     } catch (err) { setImportErr("Falha ao ler o arquivo: " + err.message); }
   };
   const confirmImport = () => {
@@ -2601,7 +2646,7 @@ function TradesScreen({ session }) {
           </Field>
           <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: "none" }} />
           <Button variant="ghost" onClick={() => { setImportErr(""); fileRef.current && fileRef.current.click(); }} title="Importar o relatório de Operações exportado do Profit (.csv)"><Icon name="upload" size={14} /> Importar Profit</Button>
-          <Button variant="gold" onClick={() => { setErr(""); setShowForm(s => !s); }}>{showForm ? "× Fechar" : "+ Novo trade"}</Button>
+          <Button variant="gold" onClick={() => { setErr(""); if (showForm) { closeForm(); } else { setEditId(null); setForm(f => ({ ...baseForm, data: f.data, ativo: f.ativo, direcao: f.direcao, unidade: f.unidade })); setShowForm(true); } }}>{showForm ? "× Fechar" : "+ Novo trade"}</Button>
         </div>
       </Card>
 
@@ -2626,6 +2671,7 @@ function TradesScreen({ session }) {
               <b style={{ color: signTone(preview.sumFin) }}>{fmtBRL(preview.sumFin)}</b>
             </div>
           )}
+          {preview.resCol && <div style={{ fontSize: 12, color: T.dim }}>Coluna de resultado (R$) detectada: <b style={{ color: T.mut }}>{preview.resCol}</b> — confira se é o valor financeiro, não os pontos.</div>}
           {!valorR && preview.novos.length > 0 && <Banner tone="gold">Defina o <b>valor de 1R</b> acima para que estas operações entrem nas estatísticas do Dashboard (o resultado em R$ já fica registrado).</Banner>}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Button variant="ghost" size="sm" onClick={() => setPreview(null)}>Cancelar</Button>
@@ -2639,6 +2685,7 @@ function TradesScreen({ session }) {
       {/* Formulário */}
       {showForm && (
         <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: editId != null ? T.gold : T.text }}>{editId != null ? "Editar operação" : "Nova operação"}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
             <Field label="Data"><Input type="date" {...inp("data")} /></Field>
             <Field label="Ativo">
@@ -2666,8 +2713,8 @@ function TradesScreen({ session }) {
             <Field label="Notas"><Input {...inp("notas")} placeholder="opcional" /></Field>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>Cancelar</Button>
-            <Button size="sm" onClick={addTrade}>Registrar operação</Button>
+            <Button variant="ghost" size="sm" onClick={closeForm}>Cancelar</Button>
+            <Button size="sm" onClick={addTrade}>{editId != null ? "Salvar alterações" : "Registrar operação"}</Button>
           </div>
         </Card>
       )}
@@ -2682,12 +2729,12 @@ function TradesScreen({ session }) {
           ? <div style={{ padding: 28, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhuma operação ainda. Clique em <b>+ Novo trade</b> para começar.</div>
           : (
             <div className="fh-scroll-x">
-              <div style={{ minWidth: 720 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 48px", gap: 8, padding: "8px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
+              <div style={{ minWidth: 748 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 76px", gap: 8, padding: "8px 16px", fontSize: 10, color: T.dim, letterSpacing: 0.4, borderBottom: "1px solid " + T.line }}>
                   <div>DATA</div><div>ORIGEM</div><div>ATIVO / SETUP</div><div style={{ textAlign: "right" }}>R</div><div style={{ textAlign: "right" }}>R$</div><div style={{ position: "sticky", right: 0, background: T.panel }}></div>
                 </div>
                 {pg.slice.map(e => (
-                  <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 48px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
+                  <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 76px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
                     <div style={{ fontSize: 12, color: T.mut }}>{e.t ? dmy(e.t) : "—"}</div>
                     <div><Badge tone={FONTE_TONE[e.fonte]}>{FONTE_LABEL[e.fonte]}</Badge></div>
                     <div style={{ fontFamily: T.sans }}>
@@ -2697,9 +2744,12 @@ function TradesScreen({ session }) {
                     </div>
                     <div style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: e.r == null ? T.dim : signTone(e.r) }}>{e.r == null ? "—" : fmtR(e.r)}</div>
                     <div style={{ textAlign: "right", fontSize: 13, color: e.fin == null ? T.dim : signTone(e.fin) }}>{e.fin == null ? "—" : fmtBRL(e.fin)}</div>
-                    <div style={{ position: "sticky", right: 0, background: T.panel, display: "flex", justifyContent: "flex-end" }}>
+                    <div style={{ position: "sticky", right: 0, background: T.panel, display: "flex", justifyContent: "flex-end", gap: 5 }}>
+                      {e.fonte === "manual" && (
+                        <button className="fh-btn" onClick={() => openEdit(e)} title="Editar operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.gold, borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="edit" size={14} /></button>
+                      )}
                       {(e.fonte === "manual" || e.fonte === "conselheiro")
-                        ? <button className="fh-btn" onClick={() => askRemove(e)} title="Excluir operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.red, borderRadius: 8, width: 32, height: 32, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="trash" size={15} /></button>
+                        ? <button className="fh-btn" onClick={() => askRemove(e)} title="Excluir operação" style={{ background: "transparent", border: "1px solid " + T.line, color: T.red, borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="trash" size={15} /></button>
                         : <span title="Registrado automaticamente" style={{ fontSize: 14, color: T.dim }}>🔒</span>}
                     </div>
                   </div>
