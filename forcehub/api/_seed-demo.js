@@ -140,6 +140,9 @@ async function cleanupCohort(redis) {
       await redis.del("forcehub:trades:" + u.user);
       await redis.del("forcehub:conselheiro:" + u.user);
       await redis.del("forcehub:positions:" + u.user);
+      // Também as contas simulador (sufixo ":sim"), caso existam.
+      await redis.del("forcehub:trades:" + u.user + ":sim");
+      await redis.del("forcehub:conselheiro:" + u.user + ":sim");
       removed.push(u.user);
       delete users[k];
     }

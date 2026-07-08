@@ -1687,9 +1687,9 @@ function CarteiraScreen({ canWrite }) {
 }
 
 // ─── O Conselheiro ────────────────────────────────────────────────────────────
-function ConselheiroScreen({ userId }) {
+function ConselheiroScreen({ userId, account = "real", setAccount }) {
   const MARGEM_WIN = 1000; const MARGEM_WDO = 1500;
-  const baseUrl = "/api/conselheiro?user=" + encodeURIComponent(userId || "anon");
+  const baseUrl = "/api/conselheiro?user=" + encodeURIComponent(userId || "anon") + "&account=" + account;
   const CHAT_W = 820; // largura máxima da coluna do chat (centralizada)
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
@@ -1725,17 +1725,23 @@ function ConselheiroScreen({ userId }) {
   };
   const removePending = (i) => setPending(p => p.filter((_, j) => j !== i));
   useEffect(() => { endRef.current && endRef.current.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+  // Recarrega perfil/diário ao trocar de conta e reinicia o chat (cada conta
+  // tem seu próprio perfil e histórico do Conselheiro).
   useEffect(() => {
+    let alive = true;
+    setPerfil(null); setDiario([]); setPending([]); setInput("");
     const load = async () => {
       try {
-        const j = await api.get(baseUrl);
+        const j = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon") + "&account=" + account);
+        if (!alive) return;
         if (j.perfil) setPerfil(j.perfil);
         if (Array.isArray(j.diario)) setDiario(j.diario);
       } catch (e) {}
-      setMsgs([{ role: "assistant", content: "Olá! Sou O Conselheiro — seu coaching de trading pessoal.\n\nEstou aqui para te ajudar a operar com disciplina, gestão de risco e consistência.\n\nPara começar: qual é o capital que você tem disponível para operar hoje?" }]);
+      if (alive) setMsgs([{ role: "assistant", content: "Olá! Sou O Conselheiro — seu coaching de trading pessoal.\n\nEstou aqui para te ajudar a operar com disciplina, gestão de risco e consistência.\n\nPara começar: qual é o capital que você tem disponível para operar hoje?" }]);
     };
     load();
-  }, []);
+    return () => { alive = false; };
+  }, [account]);
 
   const savePerfil = async (p) => { setPerfil(p); try { await api.post(baseUrl, { perfil: p }); } catch (e) {} };
   const saveDiario = async (entry) => { const novo = [...diario, entry]; setDiario(novo); try { await api.post(baseUrl, { diario: novo }); } catch (e) {} };
@@ -1800,7 +1806,8 @@ function ConselheiroScreen({ userId }) {
     <div className="fh-fade" style={{ flex: 1, display: "flex", minHeight: 0 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ flexShrink: 0, padding: "12px 18px", borderBottom: "1px solid " + T.line, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div style={{ display: "flex", gap: 18 }}>
+          <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
+            {setAccount && <AccountToggle account={account} setAccount={setAccount} size="sm" />}
             {diario.length > 0 && [["Hoje", totalHoje], ["Semana", totalSemana], ["Mês", totalMes]].map(([l, v]) => (
               <div key={l}>
                 <div style={{ fontSize: 10, color: T.dim, textTransform: "uppercase", letterSpacing: 0.5 }}>{l}</div>
@@ -2577,8 +2584,37 @@ function ImpStat({ label, value, tone: tn = "text" }) {
   );
 }
 
+// ─── Seletor de conta (Real vs Simulador) ────────────────────────────────────
+// Estado compartilhado (no App) entre Diário, Dashboard e Conselheiro, para que
+// as três telas leiam/gravem sempre a mesma conta. Real = dourado, Simulador =
+// azul, para o usuário sempre saber em qual conta está (evita importar errado).
+const ACCOUNT_OPTS = [["real", "Conta Real"], ["sim", "Simulador"]];
+export const ACCOUNT_LABEL = { real: "Conta Real", sim: "Simulador" };
+function AccountToggle({ account, setAccount, size = "md" }) {
+  const pad = size === "sm" ? "5px 12px" : "7px 16px";
+  const fs = size === "sm" ? 12.5 : 13.5;
+  return (
+    <div style={{ display: "inline-flex", gap: 3, background: T.inset, border: "1px solid " + T.line, borderRadius: 9, padding: 3 }} role="tablist" aria-label="Conta">
+      {ACCOUNT_OPTS.map(([k, label]) => {
+        const on = account === k;
+        const accent = k === "sim" ? T.blue : T.gold;
+        return (
+          <button key={k} type="button" role="tab" aria-selected={on} onClick={() => setAccount(k)}
+            style={{
+              padding: pad, fontSize: fs, fontWeight: 700, cursor: "pointer", borderRadius: 6, border: "none",
+              fontFamily: T.sans, letterSpacing: 0.2, transition: "all .13s",
+              background: on ? accent : "transparent", color: on ? "#0a0a0b" : T.mut,
+            }}>
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Diário de Trades (registro) ──────────────────────────────────────────────
-function TradesScreen({ session }) {
+function TradesScreen({ session, account = "real", setAccount }) {
   const userId = session?.user;
   const [trades, setTrades] = useState([]);
   const [valorR, setValorR] = useState(null);
@@ -2598,23 +2634,33 @@ function TradesScreen({ session }) {
   const [preview, setPreview] = useState(null); // { novos, dupes, invalid, total, sumFin, minD, maxD }
   const fileRef = useRef(null);
 
+  // Recarrega ao trocar de conta e limpa o estado transitório (edição/prévia de
+  // importação/formulário) para não vazar dados de uma conta na outra.
   useEffect(() => {
+    let alive = true;
+    setLoading(true); setErr(""); setImportErr("");
+    setEditing(null); setShowForm(false); setPreview(null); setPage(1);
     (async () => {
       try {
-        const j = await api.get("/api/trades");
+        const j = await api.get("/api/trades?account=" + account);
+        if (!alive) return;
         const t = (j.trades || []).map(x => ({ ...x, id: typeof x.id === "number" ? x.id : idRef.current++ }));
         t.forEach(x => { if (typeof x.id === "number" && x.id >= idRef.current) idRef.current = x.id + 1; });
         setTrades(t); setValorR(j.valorR || null); setVrInput(j.valorR ? String(j.valorR) : "");
-      } catch (e) { setErr(e.message); }
-      try { const c = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon")); if (Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
-      setLoading(false);
+      } catch (e) { if (alive) setErr(e.message); }
+      try {
+        const c = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon") + "&account=" + account);
+        if (alive && Array.isArray(c.diario)) setDiario(c.diario);
+      } catch (e) {}
+      if (alive) setLoading(false);
     })();
-  }, []);
+    return () => { alive = false; };
+  }, [account]);
 
   const persist = async (nextTrades, nextValorR) => {
     const vr = nextValorR !== undefined ? nextValorR : valorR;
     setTrades(nextTrades); if (nextValorR !== undefined) setValorR(nextValorR);
-    try { await api.post("/api/trades", { trades: nextTrades, valorR: vr }); return true; }
+    try { await api.post("/api/trades?account=" + account, { trades: nextTrades, valorR: vr }); return true; }
     catch (e) { setErr("Falha ao salvar: " + e.message); return false; }
   };
   const saveValorR = async () => {
@@ -2637,7 +2683,7 @@ function TradesScreen({ session }) {
       // demais campos não existem nesse registro. Reenvia o diário (api/conselheiro).
       const novo = diario.map((d, i) => i === editing.idx ? { ...d, data: form.data, resultado: fin, reflexao: (form.notas || "").trim() } : d);
       setDiario(novo);
-      try { await api.post("/api/conselheiro?user=" + encodeURIComponent(userId || "anon"), { diario: novo }); }
+      try { await api.post("/api/conselheiro?user=" + encodeURIComponent(userId || "anon") + "&account=" + account, { diario: novo }); }
       catch (e) { setErr("Falha ao salvar: " + e.message); return; }
     } else {
       const base = { data: form.data, ativo: (form.ativo || "").trim().toUpperCase() || null, direcao: form.direcao, r, fin, setup: (form.setup || "").trim(), notas: (form.notas || "").trim() };
@@ -2687,7 +2733,7 @@ function TradesScreen({ session }) {
   const removeConselheiro = async (idx) => {
     const novo = diario.filter((_, i) => i !== idx);
     setDiario(novo);
-    try { await api.post("/api/conselheiro?user=" + encodeURIComponent(userId || "anon"), { diario: novo }); }
+    try { await api.post("/api/conselheiro?user=" + encodeURIComponent(userId || "anon") + "&account=" + account, { diario: novo }); }
     catch (e) { setErr("Falha ao excluir: " + e.message); }
   };
   // Confirmação antes de remover, seja manual ou registro do Conselheiro.
@@ -2753,8 +2799,11 @@ function TradesScreen({ session }) {
       {/* Configuração: valor de 1R + novo trade */}
       <Card style={{ padding: 18, display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Diário de Trades</div>
-          <div style={{ fontSize: 13, color: T.dim, marginTop: 4 }}>Registre cada operação em R-múltiplo (risco) ou em R$. O <b>Dashboard</b> calcula as estatísticas a partir daqui.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Diário de Trades</div>
+            {setAccount && <AccountToggle account={account} setAccount={setAccount} size="sm" />}
+          </div>
+          <div style={{ fontSize: 13, color: T.dim, marginTop: 6 }}>Registre cada operação em R-múltiplo (risco) ou em R$. O <b>Dashboard</b> calcula as estatísticas a partir daqui. Diário separado por conta — você está em <b style={{ color: account === "sim" ? T.blue : T.gold }}>{ACCOUNT_LABEL[account]}</b>.</div>
         </div>
         <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
           <Field label="Valor de 1R (R$)">
@@ -2784,6 +2833,7 @@ function TradesScreen({ session }) {
             <div style={{ fontSize: 15, fontWeight: 700, color: T.gold, display: "flex", alignItems: "center", gap: 7 }}><Icon name="upload" size={15} /> Importar do Profit</div>
             <Button variant="ghost" size="sm" onClick={() => setPreview(null)} style={{ padding: "4px 10px" }}>×</Button>
           </div>
+          <Banner tone={account === "sim" ? "blue" : "gold"}>Importando para a <b>{ACCOUNT_LABEL[account]}</b>. As operações vão para a conta selecionada — confira antes de confirmar.</Banner>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
             <ImpStat label="No arquivo" value={preview.total} />
             <ImpStat label="Novas" value={preview.novos.length} tone={preview.novos.length ? "green" : "mut"} />
@@ -2894,8 +2944,13 @@ function TradesScreen({ session }) {
 // targetUser/onBack: quando vem do painel da Turma, mostra o dashboard de um
 // aluno (staff pode ler qualquer usuário no backend) com botão de voltar.
 const PERIODOS = [["tudo", "Tudo"], ["30d", "30 dias"], ["90d", "90 dias"], ["ano", "Este ano"]];
-function DashboardScreen({ session, targetUser, targetName, onBack }) {
+function DashboardScreen({ session, targetUser, targetName, onBack, account = "real", setAccount }) {
   const uid = targetUser || session?.user;
+  // Drill-down do aluno (painel da Turma) é sempre conta real; o dashboard
+  // próprio segue a conta selecionada. A carteira (posições) é dinheiro real,
+  // então só entra na conta real.
+  const acc = targetUser ? "real" : account;
+  const ownDash = !targetUser && !!setAccount;
   const [trades, setTrades] = useState([]);
   const [valorR, setValorR] = useState(null);
   const [diario, setDiario] = useState([]);
@@ -2908,14 +2963,21 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
   const [ai, setAi] = useState(""); const [aiLoading, setAiLoading] = useState(false); const [aiErr, setAiErr] = useState("");
 
   useEffect(() => {
+    let alive = true;
+    setLoading(true); setAi(""); setAiErr(""); setAtivoF("todos");
     (async () => {
-      const q = "?user=" + encodeURIComponent(uid || "anon");
-      try { const j = await api.get("/api/trades" + q); setTrades(j.trades || []); setValorR(j.valorR || null); } catch (e) {}
-      try { const c = await api.get("/api/conselheiro" + q); if (Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
-      try { const p = await api.get("/api/posicoes" + q); if (Array.isArray(p.posicoes)) setPosicoes(p.posicoes); } catch (e) {}
-      setLoading(false);
+      const q = "?user=" + encodeURIComponent(uid || "anon") + "&account=" + acc;
+      try { const j = await api.get("/api/trades" + q); if (alive) { setTrades(j.trades || []); setValorR(j.valorR || null); } } catch (e) {}
+      try { const c = await api.get("/api/conselheiro" + q); if (alive && Array.isArray(c.diario)) setDiario(c.diario); } catch (e) {}
+      // Posições/carteira são reais: só carrega na conta real (evita mostrar
+      // posições reais dentro do simulador).
+      if (acc === "real") {
+        try { const p = await api.get("/api/posicoes?user=" + encodeURIComponent(uid || "anon")); if (alive && Array.isArray(p.posicoes)) setPosicoes(p.posicoes); } catch (e) {}
+      } else if (alive) { setPosicoes([]); setIncludeCarteira(false); }
+      if (alive) setLoading(false);
     })();
-  }, [uid]);
+    return () => { alive = false; };
+  }, [uid, acc]);
 
   const allEvents = buildEvents({ manual: trades, valorR, diario, posicoes, includeCarteira });
   const ativosDisp = Array.from(new Set(allEvents.map(e => e.ativo).filter(Boolean))).sort();
@@ -2955,9 +3017,15 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
 
   if (!allEvents.length) {
     return (
-      <div className="fh-page">
+      <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {ownDash && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <AccountToggle account={account} setAccount={setAccount} size="sm" />
+            <span style={{ fontSize: 13, color: T.dim }}>Performance da <b style={{ color: account === "sim" ? T.blue : T.gold }}>{ACCOUNT_LABEL[account]}</b></span>
+          </div>
+        )}
         {onBack && <Button variant="ghost" size="sm" onClick={onBack} style={{ marginBottom: 14 }}>← Voltar à turma</Button>}
-        <EmptyState icon="📊" title={targetName ? targetName + " ainda não tem operações" : "Sem dados ainda"}
+        <EmptyState icon="📊" title={targetName ? targetName + " ainda não tem operações" : (account === "sim" ? "Simulador sem operações ainda" : "Sem dados ainda")}
           desc={targetName ? "Este aluno ainda não registrou trades (nem o Conselheiro registrou para ele)." : "Registre operações em Meus Trades (ou deixe O Conselheiro registrar) para ver seu dashboard de performance."} />
       </div>
     );
@@ -2970,6 +3038,12 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {ownDash && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <AccountToggle account={account} setAccount={setAccount} size="sm" />
+          <span style={{ fontSize: 13, color: T.dim }}>Performance da <b style={{ color: account === "sim" ? T.blue : T.gold }}>{ACCOUNT_LABEL[account]}</b></span>
+        </div>
+      )}
       {targetName && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <Button variant="ghost" size="sm" onClick={onBack}>← Voltar à turma</Button>
@@ -2980,14 +3054,16 @@ function DashboardScreen({ session, targetUser, targetName, onBack }) {
       {/* Fontes + filtros */}
       <Card style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-          <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{includeCarteira ? " + carteira" : ""}</div>
-          <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
-            <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
-              <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
-            </span>
-            Incluir operações da Carteira
-          </button>
+          <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{acc === "real" && includeCarteira ? " + carteira" : ""}</div>
+          {acc === "real" && (
+            <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
+              <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
+                <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
+              </span>
+              Incluir operações da Carteira
+            </button>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid " + T.line, paddingTop: 12 }}>
           <span style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4 }}>PERÍODO</span>
@@ -3269,6 +3345,12 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [active, setActive] = useState("panorama");
   const [booting, setBooting] = useState(true);
+  // Conta ativa (real | sim), compartilhada por Diário, Dashboard e Conselheiro
+  // e lembrada entre sessões.
+  const [account, setAccountRaw] = useState(() => {
+    try { return localStorage.getItem("fh_account") === "sim" ? "sim" : "real"; } catch (e) { return "real"; }
+  });
+  const setAccount = (a) => { const v = a === "sim" ? "sim" : "real"; setAccountRaw(v); try { localStorage.setItem("fh_account", v); } catch (e) {} };
   const enter = (s) => { setSession(s); setActive(firstAllowed(s)); };
 
   // Restaura a sessão a partir do cookie (mantém o login após recarregar).
@@ -3312,9 +3394,9 @@ export default function App() {
       <Shell session={session} active={current} onNavigate={setActive} onLogout={logout} onUpdateSession={setSession}>
         {current === "panorama" && <PanoramaScreen session={session} />}
         {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} />}
-        {current === "conselheiro" && <ConselheiroScreen userId={session?.user} />}
-        {current === "trades" && <TradesScreen session={session} />}
-        {current === "dashboard" && <DashboardScreen session={session} />}
+        {current === "conselheiro" && <ConselheiroScreen userId={session?.user} account={account} setAccount={setAccount} />}
+        {current === "trades" && <TradesScreen session={session} account={account} setAccount={setAccount} />}
+        {current === "dashboard" && <DashboardScreen session={session} account={account} setAccount={setAccount} />}
         {current === "turma" && <TurmaScreen session={session} />}
         {current === "clientes" && <ClientesScreen session={session} />}
         {current === "interessados" && <InteressadosScreen session={session} />}
