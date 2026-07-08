@@ -1701,6 +1701,10 @@ function ConselheiroScreen({ userId, account = "real", setAccount }) {
   const [attachError, setAttachError] = useState("");
   const endRef = useRef(null);
   const fileRef = useRef(null);
+  // Conta atual sempre atualizada — usada para descartar respostas de IA que
+  // chegam depois de uma troca de conta (evita gravar/mostrar na conta errada).
+  const accountRef = useRef(account);
+  accountRef.current = account;
   const MAX_FILE = 3.5 * 1024 * 1024; // ~3.5MB por arquivo (limite de payload serverless)
   const ACCEPT = "image/png,image/jpeg,image/webp,image/heic,image/heif,application/pdf";
 
@@ -1760,6 +1764,7 @@ function ConselheiroScreen({ userId, account = "real", setAccount }) {
     const txt = msg || input.trim();
     const attached = pending;
     if ((!txt && attached.length === 0) || loading) return;
+    const sentAccount = account; // conta no momento do envio (a resposta pertence a ela)
     setInput(""); setPending([]); setAttachError("");
     const newMsgs = [...msgs, { role: "user", content: txt, files: attached }];
     setMsgs(newMsgs); setLoading(true);
@@ -1789,6 +1794,9 @@ function ConselheiroScreen({ userId, account = "real", setAccount }) {
         return { role: m.role, content: m.content };
       });
       const data = await callAI({ max_tokens: 1500, system: buildSys(), messages: apiMessages });
+      // Se o usuário trocou de conta durante a geração, descarta a resposta:
+      // ela pertence à conta anterior e não deve poluir nem gravar na atual.
+      if (accountRef.current !== sentAccount) { setLoading(false); return; }
       const text = data.content ? data.content.map(b => b.text || "").join("") : "";
       // Detecta o JSON de salvamento de resultado (tolerante a espaços/formato).
       const saveJson = extractJSON(text, ['"action"']);
@@ -1798,7 +1806,7 @@ function ConselheiroScreen({ userId, account = "real", setAccount }) {
       }
       const display = text.replace(/\{[^{}]*"action"\s*:\s*"save"[\s\S]*?\}/g, "").trim();
       setMsgs(m => [...m, { role: "assistant", content: display || "Não consegui responder agora. Pode reformular sua mensagem?" }]);
-    } catch (e) { setMsgs(m => [...m, { role: "assistant", content: "Erro de conexão. Tente novamente." }]); }
+    } catch (e) { if (accountRef.current === sentAccount) setMsgs(m => [...m, { role: "assistant", content: "Erro de conexão. Tente novamente." }]); }
     setLoading(false);
   };
 
@@ -2632,14 +2640,19 @@ function TradesScreen({ session, account = "real", setAccount }) {
   const [vrStatus, setVrStatus] = useState(""); // "" | "saving" | "saved"
   const [importErr, setImportErr] = useState("");
   const [preview, setPreview] = useState(null); // { novos, dupes, invalid, total, sumFin, minD, maxD }
+  const [loadFailed, setLoadFailed] = useState(false); // falha ao carregar a conta -> bloqueia escrita
+  const [reloadKey, setReloadKey] = useState(0);
   const fileRef = useRef(null);
 
-  // Recarrega ao trocar de conta e limpa o estado transitório (edição/prévia de
-  // importação/formulário) para não vazar dados de uma conta na outra.
+  // Recarrega ao trocar de conta. Limpa TODO o estado (inclusive os dados) para
+  // nunca reter o diário de uma conta ao entrar na outra: se o GET falhar, o
+  // estado fica vazio e a tela bloqueia a escrita (loadFailed) — assim uma falha
+  // de carregamento nunca sobrescreve a conta selecionada com dados errados.
   useEffect(() => {
     let alive = true;
-    setLoading(true); setErr(""); setImportErr("");
+    setLoading(true); setErr(""); setImportErr(""); setLoadFailed(false);
     setEditing(null); setShowForm(false); setPreview(null); setPage(1);
+    setTrades([]); setValorR(null); setVrInput(""); setDiario([]);
     (async () => {
       try {
         const j = await api.get("/api/trades?account=" + account);
@@ -2647,7 +2660,7 @@ function TradesScreen({ session, account = "real", setAccount }) {
         const t = (j.trades || []).map(x => ({ ...x, id: typeof x.id === "number" ? x.id : idRef.current++ }));
         t.forEach(x => { if (typeof x.id === "number" && x.id >= idRef.current) idRef.current = x.id + 1; });
         setTrades(t); setValorR(j.valorR || null); setVrInput(j.valorR ? String(j.valorR) : "");
-      } catch (e) { if (alive) setErr(e.message); }
+      } catch (e) { if (alive) { setErr(e.message); setLoadFailed(true); } }
       try {
         const c = await api.get("/api/conselheiro?user=" + encodeURIComponent(userId || "anon") + "&account=" + account);
         if (alive && Array.isArray(c.diario)) setDiario(c.diario);
@@ -2655,7 +2668,7 @@ function TradesScreen({ session, account = "real", setAccount }) {
       if (alive) setLoading(false);
     })();
     return () => { alive = false; };
-  }, [account]);
+  }, [account, reloadKey]);
 
   const persist = async (nextTrades, nextValorR) => {
     const vr = nextValorR !== undefined ? nextValorR : valorR;
@@ -2791,6 +2804,17 @@ function TradesScreen({ session, account = "real", setAccount }) {
   const inp = (k) => ({ value: form[k], onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) });
 
   if (loading) return <div style={{ padding: 40 }}><Loading label="Carregando seu diário..." /></div>;
+
+  // Falha ao carregar a conta: não renderiza o diário (evita que uma escrita
+  // grave dados vazios/errados na conta selecionada). Oferece trocar de conta
+  // ou tentar de novo.
+  if (loadFailed) return (
+    <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {setAccount && <AccountToggle account={account} setAccount={setAccount} size="sm" />}
+      <Banner tone="red">Não foi possível carregar o diário da <b>{ACCOUNT_LABEL[account]}</b>. Verifique a conexão e tente novamente.</Banner>
+      <div><Button variant="ghost" onClick={() => setReloadKey(k => k + 1)}>Tentar novamente</Button></div>
+    </div>
+  );
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
