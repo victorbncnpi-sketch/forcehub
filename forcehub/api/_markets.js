@@ -181,7 +181,8 @@ export default async function handler(req, res) {
     const entries = await Promise.allSettled(Object.entries(GROUPS).map(async ([g, list]) => [g, await fetchGroup(list)]));
     for (const e of entries) if (e.status === "fulfilled") groups[e.value[0]] = e.value[1];
     try { groups.cripto = await fetchCrypto(); } catch (_) { groups.cripto = []; }
-    try { groups.agro = await fetchAgro(redis); } catch (_) { groups.agro = []; }
+    // Agrícolas (B3) entram na coluna "Futuros" — são contratos futuros também.
+    try { const agro = await fetchAgro(redis); if (agro.length) groups.futuros = [...(groups.futuros || []), ...agro]; } catch (_) {}
 
     const total = Object.values(groups).reduce((s, arr) => s + arr.length, 0);
     if (!total) throw new Error("Nenhuma cotação disponível agora.");
