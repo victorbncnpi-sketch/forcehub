@@ -177,6 +177,32 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
   }
 
+  // Diagnóstico do DI de 1 dia: /api/market-data?probe=di
+  // Confirma a raiz (asset) do futuro de DI e mostra alguns contratos da curva
+  // com os últimos fechamentos (taxa). Testa alternativas caso "DI1" não seja a
+  // raiz esperada no ambiente com token.
+  if (req.query.probe === "di") {
+    const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+    const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const out = {};
+    for (const asset of ["DI1", "DI", "OC1"]) {
+      out[asset] = {};
+      try {
+        const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
+        const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
+        out[asset].count = contracts.length;
+        out[asset].contracts = contracts.slice(0, 6).map(c => ({ symbol: c.symbol, exp: c.expirationDate || null }));
+        const front = pickFront(contracts, todayBRT);
+        out[asset].front = front ? front.symbol : null;
+        if (front) {
+          const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)) || [];
+          out[asset].recentRaw = raw.slice(-6).map(b => ({ date: toISODate(b.date), close: (b.close ?? b.settlement) ?? null }));
+        }
+      } catch (e) { out[asset].error = String((e && e.message) || e); }
+    }
+    return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
+  }
+
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
   const redis = getRedis();
   const cacheKey = "forcehub:marketdata:" + numDays;

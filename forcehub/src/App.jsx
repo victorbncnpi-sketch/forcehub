@@ -105,11 +105,7 @@ async function aiSearchJSON(prompt, anchors, attempts = 2) {
   throw lastErr;
 }
 
-// ─── Helpers de agenda / notícias ─────────────────────────────────────────────
-const FLAG = { "Brasil": "🇧🇷", "EUA": "🇺🇸", "Zona do Euro": "🇪🇺", "Reino Unido": "🇬🇧", "China": "🇨🇳", "Japão": "🇯🇵", "Canadá": "🇨🇦", "Austrália": "🇦🇺" };
-const flagOf = (c) => FLAG[c] || (c === "BR" ? "🇧🇷" : c === "US" ? "🇺🇸" : "🌐");
-const bulls = (n) => "🐂".repeat(Math.min(Math.max(n || 1, 1), 3));
-const impactColor = (n) => (n >= 3 ? T.red : n >= 2 ? T.gold : T.dim);
+// ─── Helpers de notícias ──────────────────────────────────────────────────────
 const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
 
 // ─── Login ────────────────────────────────────────────────────────────────────
@@ -357,90 +353,122 @@ function ProfileModal({ session, onClose, onSaved }) {
   );
 }
 
-// ─── Painel de Agenda econômica (com filtros e agrupamento) ───────────────────
-function AgendaPanel({ events, loading }) {
-  const [excluded, setExcluded] = useState([]);
-  const [impacts, setImpacts] = useState({ 3: true, 2: true, 1: true });
-  const [grouped, setGrouped] = useState(false);
-  const [page, setPage] = useState(1);
-  const countriesAll = Array.from(new Set(events.map(e => e.country)));
-  const toggleCountry = (c) => setExcluded(x => x.includes(c) ? x.filter(v => v !== c) : [...x, c]);
-  const toggleImpact = (k) => setImpacts(m => ({ ...m, [k]: !m[k] }));
-  const filtered = events.filter(e => impacts[e.impact] && !excluded.includes(e.country));
-  // Volta para a 1ª página sempre que os filtros/agrupamento mudam.
-  useEffect(() => { setPage(1); }, [excluded, impacts, grouped]);
-  const pg = pageInfo(filtered, page, 8); // paginação só na lista plana
+// ─── Panorama IA — direcional do dia (substitui a antiga Agenda) ──────────────
+// Alimenta a IA com as cotações do ativo escolhido + as principais cotações que
+// já temos (índices, futuros, DI de 1 dia, moedas, commodities, cripto) + as
+// notícias do card ao lado, e pede um panorama/opinião de direcional.
+const PANO_ASSETS = [["WIN", "Índice"], ["IBOV", "IBOV"], ["WDO", "Dólar"]];
+const PANO_AI_LABEL = {
+  WIN: "Mini Índice (WIN) — futuro do Ibovespa",
+  IBOV: "Ibovespa (índice à vista)",
+  WDO: "Mini Dólar (WDO) — futuro do dólar",
+};
+const PANO_DISCLAIMER = "Análise gerada por IA — conteúdo meramente informativo e educacional. Não é recomendação de compra ou venda.";
+const PANO_SYS =
+  "Você é um estrategista de mercado da B3 (CNPI), especialista em day trade e swing trade. " +
+  "Com base APENAS nas cotações e notícias fornecidas, monte um panorama do dia e dê sua opinião sobre o direcional (viés) do ativo em foco para HOJE e os PRÓXIMOS DIAS. " +
+  "Estruture a resposta EXATAMENTE nestas seções, cada uma começando com o título em MAIÚSCULAS seguido de ':' e itens com '- ':\n" +
+  "PANORAMA: (contexto macro/global e do ativo)\n" +
+  "DIRECIONAL HOJE: (viés de alta, baixa ou lateral, com justificativa e possíveis gatilhos)\n" +
+  "PRÓXIMOS DIAS: (viés e o que observar)\n" +
+  "RISCOS: (notícias/eventos que podem mudar o cenário)\n" +
+  "Regras: use somente os dados fornecidos, não invente números, seja objetivo e técnico, em português, texto puro (sem markdown além dos itens '- '). " +
+  "Encerre com a linha exatamente: 'Análise gerada por IA — conteúdo meramente informativo e educacional, não é recomendação de investimento.'";
 
-  const COLS = "52px 32px 1fr 80px 80px";
-  const TE_URL = "https://tradingeconomics.com/calendar";
-  const chipStyle = (active, tone = T.gold) => ({ fontSize: 12, padding: "5px 10px", borderRadius: 8, border: "1px solid " + (active ? tone + "66" : T.line), background: active ? tone + "1a" : "transparent", color: active ? tone : T.mut });
+// Monta o texto (contexto) enviado à IA a partir do estado já carregado no
+// Panorama — sem chamadas extras ao backend.
+function buildPanoramaText({ assetKey, rows, mkt, news, analises }) {
+  const fmtChg = (it) => it.changePct == null ? "" : " (" + (it.changePct >= 0 ? "+" : "") + it.changePct.toFixed(2) + "%)";
+  const fmtVal = (it, group) => {
+    if (it.price == null) return "—";
+    if (group === "juros") return it.price.toFixed(2) + "%";
+    return it.price >= 1000 ? it.price.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : it.price.toFixed(it.price >= 1 ? 2 : 4);
+  };
+  const line = (items, group) => (items || []).filter(it => it && it.price != null).map(it => it.label + ": " + fmtVal(it, group) + fmtChg(it)).join("; ");
+  const L = [];
+  L.push("ATIVO EM FOCO: " + (PANO_AI_LABEL[assetKey] || assetKey));
+  const rws = ((rows && rows[assetKey]) || []).filter(r => r && (r.high !== "" || r.low !== ""));
+  if (rws.length) {
+    L.push("Máxima/mínima recentes (" + assetKey + "):");
+    for (const r of rws) L.push("- " + r.label + ": máx " + (r.high || "—") + " · mín " + (r.low || "—"));
+  }
+  const an = analises && analises[assetKey] && analises[assetKey].analise;
+  if (an) L.push("", "Análise técnica do analista (referência):", String(an).trim());
 
-  const renderRow = (n, i) => (
-    <a key={i} href={TE_URL} target="_blank" rel="noopener noreferrer" title="Ver o resultado no Trading Economics" style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, alignItems: "center", padding: "10px 12px", background: T.inset, border: "1px solid " + T.line, borderLeft: "3px solid " + impactColor(n.impact), borderRadius: 10, textDecoration: "none", cursor: "pointer" }}>
-      <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, fontFamily: T.mono }}>{n.time || "—"}</div>
-      <div style={{ fontSize: 19, textAlign: "center" }} title={n.country}>{flagOf(n.country)}</div>
-      <div>
-        <div style={{ fontSize: 13, color: T.text }}>{n.title}</div>
-        <div style={{ fontSize: 10, marginTop: 2, color: impactColor(n.impact) }}>{bulls(n.impact)}</div>
-      </div>
-      <div style={{ textAlign: "right", fontSize: 12, color: T.mut, fontFamily: T.mono }}>{n.previous || "—"}</div>
-      <div style={{ textAlign: "right", fontSize: 12, color: T.gold, fontFamily: T.mono }}>{n.forecast || "—"}</div>
-    </a>
-  );
+  const G = (mkt && mkt.groups) || {};
+  L.push("", "COTAÇÕES DE MERCADO (referência):");
+  if (G.indices && G.indices.length) L.push("Índices: " + line(G.indices, "indices"));
+  if (G.futuros && G.futuros.length) L.push("Futuros: " + line(G.futuros, "futuros"));
+  if (G.juros && G.juros.length) L.push("Juros — DI 1 dia (% a.a.): " + line(G.juros, "juros"));
+  if (G.moedas && G.moedas.length) L.push("Moedas: " + line(G.moedas, "moedas"));
+  if (G.commodities && G.commodities.length) L.push("Commodities: " + line(G.commodities, "commodities"));
+  if (G.cripto && G.cripto.length) L.push("Cripto: " + line(G.cripto, "cripto"));
+
+  if (news) {
+    L.push("", "NOTÍCIAS DE HOJE:");
+    if (news.summary) L.push("Resumo: " + news.summary);
+    const hs = (news.headlines || []).slice(0, 8);
+    if (hs.length) { L.push("Manchetes:"); for (const h of hs) L.push("- " + h.title + (h.source ? " (" + h.source + ")" : "")); }
+    const evs = (news.events || []).filter(e => e && e.impact >= 3).slice(0, 8);
+    if (evs.length) { L.push("Eventos de alto impacto hoje:"); for (const e of evs) L.push("- " + (e.time || "") + " " + (e.country || "") + " " + e.title + (e.forecast ? " (prev. " + e.forecast + ")" : "")); }
+  }
+  return L.join("\n");
+}
+
+function PanoramaIACard({ mkt, news, rows, analises }) {
+  const [asset, setAsset] = useState("IBOV");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null); // { asset, text, at }
+
+  const gerar = async () => {
+    setLoading(true); setError(null);
+    const alvo = asset;
+    try {
+      const userMsg = buildPanoramaText({ assetKey: alvo, rows, mkt, news, analises });
+      const data = await callAI({ system: PANO_SYS, max_tokens: 1600, messages: [{ role: "user", content: userMsg }] });
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+      if (!text) throw new Error("A IA não retornou o panorama agora. Tente novamente em instantes.");
+      setResult({ asset: alvo, text, at: Date.now() });
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  };
 
   return (
     <Card style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Agenda econômica — hoje</div>
-        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>{filtered.length} de {events.length} eventos · impacto 🐂 a 🐂🐂🐂 · toque num evento p/ ver o resultado ↗</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text, display: "flex", alignItems: "center", gap: 8 }}>🧭 Panorama IA — direcional do dia</div>
+        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Escolha o ativo e a IA monta um panorama e opinião de direcional (hoje e próximos dias) com as cotações e notícias atuais.</div>
       </div>
 
-      {events.length > 0 && (
-        <div style={{ padding: "12px 14px", borderBottom: "1px solid " + T.line, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-            {countriesAll.map(c => (
-              <button key={c} className="fh-btn" onClick={() => toggleCountry(c)} style={chipStyle(!excluded.includes(c))}>{flagOf(c)} {c}</button>
-            ))}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", gap: 6 }}>
-              {[3, 2, 1].map(k => (
-                <button key={k} className="fh-btn" onClick={() => toggleImpact(k)} style={chipStyle(impacts[k], impactColor(k))}>{bulls(k)}</button>
-              ))}
-            </div>
-            <button className="fh-btn" onClick={() => setGrouped(g => !g)} style={chipStyle(grouped)}>⊞ Agrupar por país</button>
-          </div>
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid " + T.line, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", border: "1px solid " + T.line, borderRadius: 8, overflow: "hidden" }}>
+          {PANO_ASSETS.map(([k, l]) => (
+            <button key={k} onClick={() => { setAsset(k); setError(null); }} style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", background: asset === k ? T.goldSoft : "transparent", color: asset === k ? T.gold : T.mut }}>{l}</button>
+          ))}
         </div>
-      )}
+        <Button variant="gold" size="sm" onClick={gerar} disabled={loading}>{loading ? "⟳ Analisando..." : "✨ Gerar panorama"}</Button>
+      </div>
 
-      {loading ? <Loading label="Carregando agenda..." />
-        : filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum evento com os filtros atuais.</div>
-        : (
-          <div className="fh-scroll-x" style={{ padding: 12 }}>
-            <div style={{ minWidth: 400, display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "0 12px" }}>
-                {["HORA", "PAÍS", "EVENTO", "ANT.", "PREV."].map((h, k) => <div key={h} style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4, textAlign: k > 2 ? "right" : "left" }}>{h}</div>)}
-              </div>
-              {grouped
-                ? countriesAll.filter(c => !excluded.includes(c)).map(c => {
-                    const evs = filtered.filter(e => e.country === c);
-                    if (!evs.length) return null;
-                    return (
-                      <div key={c} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", marginTop: 4 }}>
-                          <span style={{ fontSize: 18 }}>{flagOf(c)}</span>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{c}</span>
-                          <span style={{ fontSize: 11, color: T.dim }}>· {evs.length}</span>
-                        </div>
-                        {evs.map((n, i) => renderRow(n, c + i))}
-                      </div>
-                    );
-                  })
-                : pg.slice.map((n, i) => renderRow(n, pg.from + i))}
-            </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {loading && <div style={{ padding: 28, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}><Spinner /><span style={{ fontSize: 12, color: T.dim }}>Montando o panorama de {PANO_ASSETS.find(a => a[0] === asset)?.[1]}...</span></div>}
+        {error && !loading && <div style={{ padding: "14px 18px" }}><Banner tone="red">{error}</Banner></div>}
+        {!loading && !error && result && (
+          <div style={{ padding: "14px 18px" }}>
+            <div style={{ fontSize: 11, color: T.dim, marginBottom: 8 }}>{PANO_AI_LABEL[result.asset] || result.asset} · {fmtTime(result.at)}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{renderAnalise(result.text)}</div>
           </div>
         )}
-      {!loading && !grouped && filtered.length > 0 && <Pager info={pg} setPage={setPage} label="eventos" />}
+        {!loading && !error && !result && (
+          <div style={{ padding: 26, textAlign: "center", fontSize: 13, color: T.dim, lineHeight: 1.6 }}>
+            Selecione <b style={{ color: T.mut }}>Índice</b>, <b style={{ color: T.mut }}>IBOV</b> ou <b style={{ color: T.mut }}>Dólar</b> e toque em <b style={{ color: T.gold }}>Gerar panorama</b>.
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: "10px 14px", borderTop: "1px solid " + T.line, background: T.inset, fontSize: 11, color: T.dim, lineHeight: 1.5 }}>
+        ⚠️ {PANO_DISCLAIMER}
+      </div>
     </Card>
   );
 }
@@ -484,6 +512,7 @@ function NewsPanel({ news, loading, error, refreshing, onRefresh }) {
 const fmtPrice = (p, group) => {
   if (p == null) return "—";
   if (group === "moedas") return p >= 20 ? p.toFixed(2) : p.toFixed(4);
+  if (group === "juros") return p.toFixed(2) + "%"; // DI: o "preço" é a taxa a.a.
   if (group === "cripto") return p >= 1000 ? p.toLocaleString("pt-BR", { maximumFractionDigits: 0 }) : p.toFixed(2);
   if (p >= 1000) return p.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
   if (p >= 1) return p.toFixed(2);
@@ -891,12 +920,13 @@ function PanoramaScreen({ session }) {
         <MarketBoard title="Futuros" items={srt(mkt?.groups?.futuros)} group="indices" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Moedas" items={srt(mkt?.groups?.moedas)} group="moedas" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Commodities" items={srt(mkt?.groups?.commodities)} group="commodities" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Juros — DI 1 dia" items={srt(mkt?.groups?.juros)} group="juros" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} />
       </div>
 
-      {/* Indicadores (agenda) + Notícias em duas colunas */}
+      {/* Panorama IA (direcional do dia) + Notícias em duas colunas */}
       <div className="fh-news-grid">
-        <AgendaPanel events={news?.events || []} loading={newsLoading && !news} />
+        <PanoramaIACard mkt={mkt} news={news} rows={rows} analises={analises} />
         <NewsPanel news={news} loading={newsLoading && !news} error={newsError} refreshing={newsLoading} onRefresh={() => loadNews(true)} />
       </div>
     </div>
