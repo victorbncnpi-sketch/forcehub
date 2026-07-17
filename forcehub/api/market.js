@@ -10,8 +10,9 @@ import markets from "./_markets";
 import marketData from "./_market-data";
 import cotacoes from "./_cotacoes";
 import tickers from "./_tickers";
+import options from "./_options";
 
-const ROUTES = { markets, "market-data": marketData, cotacoes, tickers };
+const ROUTES = { markets, "market-data": marketData, cotacoes, tickers, options };
 
 export default async function handler(req, res) {
   const kind = String((req.query && req.query.kind) || "").trim();

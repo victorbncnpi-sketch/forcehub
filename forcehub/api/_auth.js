@@ -15,8 +15,8 @@ export const ROLES = ["client", "moderator", "superadmin"];
 
 // Permissões granulares por página (controlam clientes). Staff (moderador/super
 // admin) tem todas implicitamente.
-export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades"];
-export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades"];
+export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio"];
+export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio"];
 
 // Cadastro inicial — usado apenas se o banco ainda não tiver usuários.
 // Estas senhas são só a semente; troque-as pelo painel admin após o 1º login.
@@ -108,6 +108,11 @@ function normalizeUsers(map) {
     if (u.role === "client" && Array.isArray(u.perms) && !u.tradesMigrated) {
       if (!u.perms.includes("trades")) u.perms.push("trades");
       u.tradesMigrated = true; changed = true;
+    }
+    // Idem para "portfolio" (carteira própria de ações e opções): concessão única.
+    if (u.role === "client" && Array.isArray(u.perms) && !u.portfolioMigrated) {
+      if (!u.perms.includes("portfolio")) u.perms.push("portfolio");
+      u.portfolioMigrated = true; changed = true;
     }
   }
   return changed;

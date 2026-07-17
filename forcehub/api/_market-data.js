@@ -203,6 +203,32 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
   }
 
+  // Diagnóstico das opções: /api/market-data?probe=opcoes[&underlying=VALE3]
+  // Confirma o acesso do token PRO à API de opções (o sandbox só libera PETR4).
+  // Mostra os vencimentos e uma amostra da cadeia (symbol/strike/close) do
+  // vencimento mais próximo, para um ativo de teste além de PETR4.
+  if (req.query.probe === "opcoes") {
+    const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+    const OPT = "https://brapi.dev/api/v2/options";
+    const out = {};
+    for (const u of ["PETR4", String(req.query.underlying || "VALE3").toUpperCase()]) {
+      out[u] = {};
+      try {
+        const je = await getJson(`${OPT}/expirations?underlying=${encodeURIComponent(u)}${tok}`);
+        const exps = (Array.isArray(je && je.expirations) ? je.expirations : []).map(toISODate).filter(Boolean);
+        out[u].expirations = exps.slice(0, 6);
+        const exp = exps.find(d => d >= new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" })) || exps[0];
+        if (exp) {
+          const jc = await getJson(`${OPT}/chain?underlying=${encodeURIComponent(u)}&expirationDate=${exp}${tok}`);
+          const series = findBarsArray(jc) || (Array.isArray(jc && jc.series) ? jc.series : []);
+          out[u].chainExp = exp;
+          out[u].chainSample = (Array.isArray(series) ? series : []).slice(0, 4).map(s => ({ symbol: s.symbol, side: s.side || s.type, strike: s.strike, close: s.close }));
+        }
+      } catch (e) { out[u].error = String((e && e.message) || e); }
+    }
+    return res.status(200).json({ ok: true, tokenUsed: !!BRAPI_TOKEN, probe: out });
+  }
+
   const numDays = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
   const redis = getRedis();
   const cacheKey = "forcehub:marketdata:" + numDays;

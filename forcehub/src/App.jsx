@@ -12,9 +12,10 @@ const CAP_LABELS = {
   carteira_write: "Carteira — criar/editar recomendações",
   conselheiro: "O Conselheiro (IA)",
   trades: "Diário de Trades + Dashboard",
+  portfolio: "Minha Carteira (ações e opções)",
 };
-const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades"];
-const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades"];
+const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio"];
+const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio"];
 const ROLE_LABEL = { superadmin: "Super admin", moderator: "Moderador", client: "Cliente" };
 
 function can(session, cap) {
@@ -1236,7 +1237,363 @@ function TickerSelect({ value, ok, onText, onPick }) {
   );
 }
 
-function CarteiraScreen({ canWrite }) {
+// ─── Carteira própria (ações + opções) ───────────────────────────────────────
+// Montada pelo próprio usuário, separada das recomendações do analista.
+//   • Ações: cotação ao vivo (delay ~15min) via /api/cotacoes.
+//   • Opções: preço de fechamento (EOD) + gregas via brapi, marcado no backend.
+const fmtVenc = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : (iso || "—"); };
+const carteiraDir = (p) => p.direcao === "VENDA" ? -1 : 1;   // long (+1) vs short/lançador (-1)
+const precoAtualDe = (p, cot) => p.kind === "opcao" ? (typeof p.precoAtual === "number" ? p.precoAtual : null) : (cot && cot.price != null ? cot.price : null);
+const pnlPctDe = (p, price) => (price == null || !p.precoMedio) ? null : carteiraDir(p) * ((price - p.precoMedio) / p.precoMedio) * 100;
+const pnlCashDe = (p, price) => (price == null || p.precoMedio == null) ? null : carteiraDir(p) * (price - p.precoMedio) * (Number(p.qty) || 0);
+const alertaDe = (p, price) => {
+  if (price == null || p.status !== "ABERTA") return null;
+  const venda = p.direcao === "VENDA";
+  if (p.alvo != null && p.alvo !== "" && (venda ? price <= Number(p.alvo) : price >= Number(p.alvo))) return "alvo";
+  if (p.stop != null && p.stop !== "" && (venda ? price >= Number(p.stop) : price <= Number(p.stop))) return "stop";
+  return null;
+};
+
+// Seletor guiado de opção: ativo subjacente → vencimento → tipo → série (strike).
+function OpcaoPicker({ form, setForm }) {
+  const [exps, setExps] = useState([]);
+  const [chain, setChain] = useState([]);
+  const [loadingExp, setLoadingExp] = useState(false);
+  const [loadingChain, setLoadingChain] = useState(false);
+  const [erro, setErro] = useState("");
+
+  const carregarVencimentos = async (underlying) => {
+    setExps([]); setChain([]); setErro("");
+    setForm(p => ({ ...p, expiration: "", symbol: "", strike: "", serieClose: null }));
+    if (!underlying) return;
+    setLoadingExp(true);
+    try {
+      const j = await api.get("/api/market?kind=options&op=expirations&underlying=" + encodeURIComponent(underlying));
+      setExps(j.expirations || []);
+      if (!(j.expirations || []).length) setErro("Sem opções listadas para " + underlying + ".");
+    } catch (e) { setErro(e.message); }
+    finally { setLoadingExp(false); }
+  };
+  const carregarChain = async (underlying, exp) => {
+    setChain([]); setErro("");
+    setForm(p => ({ ...p, symbol: "", strike: "", serieClose: null }));
+    if (!underlying || !exp) return;
+    setLoadingChain(true);
+    try {
+      const j = await api.get("/api/market?kind=options&op=chain&underlying=" + encodeURIComponent(underlying) + "&exp=" + encodeURIComponent(exp));
+      setChain(j.series || []);
+      if (!(j.series || []).length) setErro("Sem séries negociadas nesse vencimento.");
+    } catch (e) { setErro(e.message); }
+    finally { setLoadingChain(false); }
+  };
+
+  const series = chain.filter(s => s.side === form.side).sort((a, b) => (a.strike || 0) - (b.strike || 0));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Field label="Ativo subjacente" hint={form.underlying ? (form.underlyingOk ? "✓ " + form.underlying : "Selecione na lista") : "Ação/ETF/índice da opção (ex.: PETR4)"}>
+        <TickerSelect value={form.underlying} ok={form.underlyingOk}
+          onText={(v) => setForm(p => ({ ...p, underlying: v, underlyingOk: false }))}
+          onPick={(s) => { setForm(p => ({ ...p, underlying: s.ticker, underlyingOk: true })); carregarVencimentos(s.ticker); }} />
+      </Field>
+
+      {form.underlyingOk && (
+        <Field label="Vencimento" hint={loadingExp ? "Buscando vencimentos..." : "Data em que a opção vence"}>
+          <select className="fh-input" value={form.expiration} disabled={loadingExp || !exps.length}
+            onChange={e => { const v = e.target.value; setForm(p => ({ ...p, expiration: v })); carregarChain(form.underlying, v); }}
+            style={{ width: "100%", fontFamily: T.mono }}>
+            <option value="">{loadingExp ? "carregando..." : (exps.length ? "selecione o vencimento" : "sem vencimentos")}</option>
+            {exps.map(d => <option key={d} value={d}>{fmtVenc(d)}</option>)}
+          </select>
+        </Field>
+      )}
+
+      {form.expiration && (
+        <Field label="Tipo">
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["call", "CALL (compra)", T.green], ["put", "PUT (venda)", T.red]].map(([v, l, c]) => {
+              const on = form.side === v;
+              return <button key={v} type="button" className="fh-btn" onClick={() => setForm(p => ({ ...p, side: v, symbol: "", strike: "", serieClose: null }))}
+                style={{ flex: 1, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? c + "88" : T.line), background: on ? c + "1a" : "transparent", color: on ? c : T.mut }}>{l}</button>;
+            })}
+          </div>
+        </Field>
+      )}
+
+      {form.expiration && (
+        <Field label="Série (strike)" hint={loadingChain ? "Buscando séries..." : "Strike em reais · último fechamento entre parênteses"}>
+          <select className="fh-input" value={form.symbol} disabled={loadingChain || !series.length}
+            onChange={e => {
+              const s = series.find(x => x.symbol === e.target.value);
+              setForm(p => ({ ...p, symbol: s ? s.symbol : "", strike: s ? s.strike : "", serieClose: s ? s.close : null, precoMedio: (p.precoMedio === "" && s && s.close != null) ? String(s.close) : p.precoMedio }));
+            }}
+            style={{ width: "100%", fontFamily: T.mono }}>
+            <option value="">{loadingChain ? "carregando..." : (series.length ? "selecione o strike" : "sem séries")}</option>
+            {series.map(s => <option key={s.symbol} value={s.symbol}>{"R$ " + (s.strike != null ? s.strike.toFixed(2) : "—") + " · " + s.symbol + (s.close != null ? "  (R$ " + s.close.toFixed(2) + ")" : "")}</option>)}
+          </select>
+        </Field>
+      )}
+
+      {erro && <div style={{ fontSize: 12, color: T.gold }}>{erro}</div>}
+      {form.symbol && <div style={{ fontSize: 12, color: T.dim, fontFamily: T.mono }}>Série selecionada: <span style={{ color: T.gold }}>{form.symbol}</span> · {form.side.toUpperCase()} · strike R$ {Number(form.strike).toFixed(2)} · venc {fmtVenc(form.expiration)}</div>}
+    </div>
+  );
+}
+
+const CARTEIRA_FORM_VAZIO = { kind: "acao", ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", qty: "", precoMedio: "", alvo: "", stop: "", obs: "", underlying: "", underlyingOk: false, expiration: "", side: "call", symbol: "", strike: "", serieClose: null };
+
+function MinhaCarteira() {
+  const [posicoes, setPosicoes] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(CARTEIRA_FORM_VAZIO);
+  const [cotacoes, setCotacoes] = useState({});
+  const [cotAt, setCotAt] = useState(0);
+  const [page, setPage] = useState(1);
+  const idRef = useRef(1);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const p = await api.get("/api/posicoes?scope=own");
+        if (!active) return;
+        const list = p.posicoes || [];
+        setPosicoes(list);
+        idRef.current = Math.max(0, ...list.map(x => x.id || 0)) + 1;
+      } catch (e) { if (active) setLoadError(e.message); }
+      finally { if (active) setLoaded(true); }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  // Cotações ao vivo das AÇÕES abertas (opções são marcadas no backend, EOD).
+  useEffect(() => {
+    let active = true;
+    const tickers = [...new Set(posicoes.filter(p => p.kind !== "opcao" && p.status === "ABERTA").map(p => p.ticker).filter(Boolean))];
+    if (!tickers.length) { setCotacoes({}); return; }
+    const load = async () => {
+      try { const j = await api.get("/api/cotacoes?tickers=" + encodeURIComponent(tickers.join(","))); if (active && j && j.quotes) { setCotacoes(j.quotes); setCotAt(j.generatedAt || Date.now()); } }
+      catch (e) { /* mantém o último valor */ }
+    };
+    load();
+    const t = setInterval(load, 600000);
+    return () => { active = false; clearInterval(t); };
+  }, [posicoes]);
+
+  const salvar = async (list) => {
+    try { await api.post("/api/posicoes?scope=own", { posicoes: list }); }
+    catch (e) { setLoadError("Falha ao salvar a carteira: " + e.message); }
+  };
+  const setF = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const podeAdicionar = () => {
+    const pm = numBR(form.precoMedio), q = parseInt(form.qty);
+    if (!(pm > 0) || !(q > 0)) return false;
+    return form.kind === "opcao" ? !!(form.underlyingOk && form.symbol && form.expiration) : !!(form.ticker && form.tickerOk);
+  };
+  const adicionar = () => {
+    if (!podeAdicionar()) return;
+    const pm = numBR(form.precoMedio);
+    const base = {
+      id: idRef.current++, kind: form.kind, direcao: form.direcao, qty: parseInt(form.qty), precoMedio: pm,
+      alvo: numBR(form.alvo), stop: numBR(form.stop), obs: form.obs, status: "ABERTA",
+      abertoEm: new Date().toLocaleDateString("pt-BR"),
+    };
+    const nova = form.kind === "opcao"
+      ? { ...base, ticker: form.underlying.toUpperCase(), symbol: form.symbol, side: form.side, strike: numBR(form.strike), expirationDate: form.expiration,
+          nome: `${form.underlying.toUpperCase()} ${form.side.toUpperCase()} ${Number(form.strike).toFixed(2)} · ${fmtVenc(form.expiration)}` }
+      : { ...base, ticker: form.ticker.toUpperCase(), nome: form.nome || form.ticker.toUpperCase() };
+    const list = [...posicoes, nova];
+    setPosicoes(list); salvar(list);
+    setForm(CARTEIRA_FORM_VAZIO); setShowForm(false);
+  };
+  const remover = (id) => { const list = posicoes.filter(p => p.id !== id); setPosicoes(list); salvar(list); };
+  const fechar = (id, precoSaida) => {
+    const list = posicoes.map(p => {
+      if (p.id !== id) return p;
+      const pct = pnlPctDe(p, precoSaida);
+      return { ...p, status: "FECHADA", precoSaida, dataSaida: new Date().toLocaleDateString("pt-BR"), resultado: pct != null ? +pct.toFixed(2) : null };
+    });
+    setPosicoes(list); salvar(list);
+  };
+
+  const abertas = posicoes.filter(p => p.status === "ABERTA");
+  const priceDe = (p) => precoAtualDe(p, cotacoes[p.ticker]);
+  const investido = abertas.reduce((s, p) => s + (Number(p.qty) || 0) * (p.precoMedio || 0), 0);
+  const pnlAberto = abertas.reduce((s, p) => { const c = pnlCashDe(p, priceDe(p)); return s + (c || 0); }, 0);
+  const marcaveis = abertas.filter(p => priceDe(p) != null).length;
+  const fechadas = posicoes.filter(p => p.resultado != null);
+  const realizado = fechadas.reduce((s, p) => s + p.resultado, 0);
+  const temOpcaoAberta = abertas.some(p => p.kind === "opcao");
+
+  const pg = pageInfo([...posicoes].sort((a, b) => (a.status === "ABERTA" ? 0 : 1) - (b.status === "ABERTA" ? 0 : 1)), page, 10);
+
+  if (!loaded) return <Loading label="Carregando sua carteira..." />;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, color: T.dim }}>Sua carteira pessoal de ações e opções — separada das recomendações do analista.</div>
+        <Button size="sm" onClick={() => { setForm(CARTEIRA_FORM_VAZIO); setShowForm(true); }}>+ Nova posição</Button>
+      </div>
+
+      {loadError && <Banner tone="gold">{loadError}</Banner>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <Stat label="Posições abertas" value={abertas.length} tone="gold" />
+        <Stat label="Investido" value={"R$ " + investido.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} tone="blue" />
+        <Stat label="P&L aberto" value={(pnlAberto >= 0 ? "+" : "") + "R$ " + pnlAberto.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} tone={pnlAberto >= 0 ? "green" : "red"} />
+        <Stat label="Resultado realizado" value={(realizado >= 0 ? "+" : "") + realizado.toFixed(2) + "%"} tone={realizado >= 0 ? "green" : "red"} />
+        <Stat label="Total de posições" value={posicoes.length} tone="mut" />
+      </div>
+
+      <EquityCurve positions={posicoes} title="Resultado da minha carteira" noun="posição" emptyHint="A curva aparece quando você fechar a primeira posição." />
+
+      {(marcaveis > 0 || temOpcaoAberta) && (
+        <div style={{ fontSize: 11, color: T.dim, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> Ações via brapi (delay ~15min{cotAt ? " · " + fmtTime(cotAt) : ""}) · opções por fechamento (EOD).
+        </div>
+      )}
+
+      {posicoes.length === 0 ? (
+        <EmptyState icon={<Icon name="positions" size={40} color={T.dim} />} title="Sua carteira está vazia" desc="Adicione ações e opções que você acompanha para ver o preço médio, a cotação e o resultado.">
+          <Button onClick={() => setShowForm(true)}>+ Adicionar posição</Button>
+        </EmptyState>
+      ) : (
+        <Card style={{ overflow: "hidden" }}>
+          <div className="fh-scroll-x">
+            <div style={{ minWidth: 880 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 70px 96px 96px 110px 120px 180px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
+                {["ATIVO / SÉRIE", "QTD", "PREÇO MÉD.", "ATUAL", "P&L", "GREGAS / DIA", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
+              </div>
+              {pg.slice.map(p => <CarteiraRow key={p.id} p={p} cot={cotacoes[p.ticker]} onFechar={fechar} onRemove={remover} />)}
+            </div>
+          </div>
+          <Pager info={pg} setPage={setPage} label="posições" />
+        </Card>
+      )}
+
+      <div style={{ fontSize: 11, color: T.dim, lineHeight: 1.6, borderTop: "1px solid " + T.line, paddingTop: 12 }}>
+        ⚠️ Carteira montada por você, apenas para acompanhamento pessoal. Cotações de ações têm atraso (~15 min) e as de opções são de fechamento do pregão (EOD). Conteúdo meramente informativo — não é recomendação de compra ou venda.
+      </div>
+
+      {showForm && (
+        <Modal title="Nova posição na minha carteira" onClose={() => setShowForm(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Field label="O que você quer adicionar?">
+              <div style={{ display: "flex", gap: 8 }}>
+                {[["acao", "📈 Ação"], ["opcao", "🎯 Opção"]].map(([v, l]) => {
+                  const on = form.kind === v;
+                  return <button key={v} type="button" className="fh-btn" onClick={() => setForm({ ...CARTEIRA_FORM_VAZIO, kind: v })}
+                    style={{ flex: 1, padding: "10px 12px", fontSize: 14, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? T.gold + "88" : T.line), background: on ? T.goldSoft : "transparent", color: on ? T.gold : T.mut }}>{l}</button>;
+                })}
+              </div>
+            </Field>
+
+            {form.kind === "acao" ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+                <Field label="Ticker" hint={form.ticker ? (form.tickerOk ? "✓ Ativo válido" : "Selecione na lista") : "Digite 2+ letras"}>
+                  <TickerSelect value={form.ticker} ok={form.tickerOk}
+                    onText={(v) => setForm(p => ({ ...p, ticker: v, tickerOk: false }))}
+                    onPick={(s) => setForm(p => ({ ...p, ticker: s.ticker, tickerOk: true, nome: p.nome || s.nome }))} />
+                </Field>
+                <Field label="Empresa (opcional)"><Input value={form.nome} onChange={e => setF("nome", e.target.value)} placeholder="Petrobras PN" /></Field>
+              </div>
+            ) : (
+              <OpcaoPicker form={form} setForm={setForm} />
+            )}
+
+            <Field label="Direção" hint="Compra: você é titular/comprado. Venda: vendido/lançador.">
+              <div style={{ display: "flex", gap: 8 }}>
+                {[["COMPRA", "▲ Compra", T.green], ["VENDA", "▼ Venda", T.red]].map(([v, l, c]) => {
+                  const on = form.direcao === v;
+                  return <button key={v} type="button" className="fh-btn" onClick={() => setF("direcao", v)} style={{ flex: 1, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? c + "88" : T.line), background: on ? c + "1a" : "transparent", color: on ? c : T.mut }}>{l}</button>;
+                })}
+              </div>
+            </Field>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Quantidade"><Input mono type="number" min="1" value={form.qty} onChange={e => setF("qty", e.target.value)} placeholder={form.kind === "opcao" ? "100" : "100"} /></Field>
+              <Field label={form.kind === "opcao" ? "Prêmio médio (R$)" : "Preço médio (R$)"}><Input mono type="number" step="0.01" value={form.precoMedio} onChange={e => setF("precoMedio", e.target.value)} placeholder="0.00" /></Field>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Alvo (opcional)" hint="Alerta quando o preço alcançar"><Input mono type="number" step="0.01" value={form.alvo} onChange={e => setF("alvo", e.target.value)} placeholder="—" style={{ color: T.green }} /></Field>
+              <Field label="Stop (opcional)" hint="Alerta de proteção"><Input mono type="number" step="0.01" value={form.stop} onChange={e => setF("stop", e.target.value)} placeholder="—" style={{ color: T.red }} /></Field>
+            </div>
+
+            <Field label="Observações (opcional)"><Input value={form.obs} onChange={e => setF("obs", e.target.value)} placeholder="Tese, motivo da entrada..." /></Field>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <Button variant="ghost" onClick={() => setShowForm(false)}>Cancelar</Button>
+              <Button onClick={adicionar} disabled={!podeAdicionar()}>Adicionar →</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Uma linha da carteira própria (ação ou opção).
+function CarteiraRow({ p, cot, onFechar, onRemove }) {
+  const [saida, setSaida] = useState("");
+  const isOpcao = p.kind === "opcao";
+  const venda = p.direcao === "VENDA";
+  const aberta = p.status === "ABERTA";
+  const price = aberta ? precoAtualDe(p, cot) : null;
+  const pct = p.precoSaida != null ? pnlPctDe(p, p.precoSaida) : pnlPctDe(p, price);
+  const cash = aberta ? pnlCashDe(p, price) : null;
+  const pctColor = pct == null ? T.dim : pct >= 0 ? T.green : T.red;
+  const alerta = alertaDe(p, price);
+  const stale = isOpcao ? false : (cot && cot.stale);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 70px 96px 96px 110px 120px 180px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.gold }}>{isOpcao ? p.symbol : p.ticker}</span>
+          <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: isOpcao ? T.blue + "22" : T.panel2, color: isOpcao ? T.blue : T.dim, border: "1px solid " + T.line }}>{isOpcao ? p.side.toUpperCase() : "AÇÃO"}</span>
+          {alerta && <span title={alerta === "alvo" ? "Alvo atingido" : "Stop atingido"}>{alerta === "alvo" ? "🎯" : "🛑"}</span>}
+        </div>
+        <div style={{ fontSize: 10, color: venda ? T.red : T.green, fontWeight: 700 }}>{venda ? "▼ VENDA" : "▲ COMPRA"}{isOpcao ? " · venc " + fmtVenc(p.expirationDate) : ""}</div>
+        <div style={{ fontSize: 10, color: T.dim }}>{p.abertoEm}</div>
+      </div>
+      <div style={{ fontSize: 13, color: T.text }}>{p.qty}</div>
+      <div style={{ fontSize: 13, color: T.text }}>R$ {px(p.precoMedio)}</div>
+      <div style={{ fontSize: 13, color: aberta ? (price != null ? T.text : T.dim) : T.gold, display: "flex", alignItems: "center", gap: 5 }}>
+        {aberta && price != null && !isOpcao && <span title={stale ? "último valor" : "ao vivo"} style={{ width: 6, height: 6, borderRadius: "50%", background: stale ? T.dim : T.green, flexShrink: 0 }} />}
+        {aberta ? (price != null ? "R$ " + price.toFixed(2) : (isOpcao ? "s/ pregão" : "—")) : "R$ " + px(p.precoSaida)}
+      </div>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: pctColor }}>{pct == null ? "—" : (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%"}</div>
+        {cash != null && <div style={{ fontSize: 11, color: pctColor }}>{(cash >= 0 ? "+" : "") + "R$ " + cash.toFixed(2)}</div>}
+      </div>
+      <div style={{ fontSize: 11, color: T.dim }}>
+        {isOpcao
+          ? (p.greeks ? <span>Δ {p.greeks.delta != null ? p.greeks.delta.toFixed(2) : "—"}<br />IV {p.greeks.iv != null ? (p.greeks.iv * 100).toFixed(1) + "%" : "—"}</span> : (aberta ? "—" : ""))
+          : (cot && cot.changePct != null ? <span style={{ color: cot.changePct >= 0 ? T.green : T.red }}>{(cot.changePct >= 0 ? "▲ +" : "▼ ") + cot.changePct.toFixed(2) + "%"}</span> : "—")}
+      </div>
+      <div>
+        {aberta ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <Input mono type="number" step="0.01" value={saida} onChange={e => setSaida(e.target.value)} placeholder="Saída R$" style={{ padding: "7px 9px", fontSize: 13 }} />
+            <Button variant="danger" size="sm" onClick={() => { const v = parseFloat(saida); if (v) onFechar(p.id, v); }}>Fechar</Button>
+            <button className="fh-btn" onClick={() => onRemove(p.id)} title="Remover" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <Badge tone="mut">✓ {p.dataSaida}</Badge>
+            <button className="fh-btn" onClick={() => onRemove(p.id)} title="Remover" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CarteiraScreen({ canWrite, canPortfolio }) {
   const [acoes, setAcoes] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
   const [aba, setAba] = useState("carteira");
@@ -1423,13 +1780,14 @@ function CarteiraScreen({ canWrite }) {
     { key: "carteira", label: tabLabel("list", "Recomendações") },
     { key: "posicoes", label: tabLabel("positions", "Minhas posições (" + abertas + ")") },
     { key: "track", label: tabLabel("carteira", "Desempenho") },
+    ...(canPortfolio ? [{ key: "propria", label: tabLabel("carteira", "Minha carteira") }] : []),
   ];
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
         <Tabs items={tabs} value={aba} onChange={setAba} />
-        {canWrite && (
+        {canWrite && aba !== "propria" && (
           <div style={{ display: "flex", gap: 10 }}>
             <Button variant="success" size="sm" onClick={scan} disabled={scanning}>{scanning ? "⟳ Buscando..." : <><Icon name="search" size={14} /> Buscar com IA</>}</Button>
             <Button size="sm" onClick={() => setShowForm(true)}>+ Nova recomendação</Button>
@@ -1437,9 +1795,11 @@ function CarteiraScreen({ canWrite }) {
         )}
       </div>
 
-      {loadError && <Banner tone="gold">Persistência indisponível ({loadError}). Configure o banco (UPSTASH_REDIS_REST_URL/TOKEN) para salvar a carteira.</Banner>}
+      {aba === "propria" && canPortfolio && <MinhaCarteira />}
 
-      {!loaded && <Loading label="Carregando carteira..." />}
+      {loadError && aba !== "propria" && <Banner tone="gold">Persistência indisponível ({loadError}). Configure o banco (UPSTASH_REDIS_REST_URL/TOKEN) para salvar a carteira.</Banner>}
+
+      {!loaded && aba !== "propria" && <Loading label="Carregando carteira..." />}
 
       {loaded && aba === "carteira" && (
         <>
@@ -3447,7 +3807,7 @@ export default function App() {
       <GlobalStyle />
       <Shell session={session} active={current} onNavigate={setActive} onLogout={logout} onUpdateSession={setSession}>
         {current === "panorama" && <PanoramaScreen session={session} />}
-        {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} />}
+        {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} canPortfolio={can(session, "portfolio")} />}
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} account={account} setAccount={setAccount} />}
         {current === "trades" && <TradesScreen session={session} account={account} setAccount={setAccount} />}
         {current === "dashboard" && <DashboardScreen session={session} account={account} setAccount={setAccount} />}
