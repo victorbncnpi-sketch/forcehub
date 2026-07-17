@@ -165,6 +165,21 @@ export function Banner({ tone: t = "gold", children }) {
   );
 }
 
+// Aviso evidente (educacional/legal): borda dourada, título em destaque e texto
+// branco legível. Para deixar claro que sugestões/análises são informativas e
+// avisos de delay das cotações.
+export function Disclaimer({ title = "Aviso importante", icon = "⚠️", children, style }) {
+  return (
+    <div style={{ display: "flex", gap: 11, alignItems: "flex-start", background: T.goldSoft, border: "1px solid " + T.gold + "66", borderLeft: "3px solid " + T.gold, borderRadius: 10, padding: "12px 15px", ...style }}>
+      <span style={{ fontSize: 17, lineHeight: 1.25, flexShrink: 0 }}>{icon}</span>
+      <div style={{ minWidth: 0 }}>
+        {title && <div style={{ fontSize: 12.5, fontWeight: 800, color: T.gold, letterSpacing: 0.3, marginBottom: 3, textTransform: "uppercase" }}>{title}</div>}
+        <div style={{ fontSize: 13, color: T.text, lineHeight: 1.6 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 export function Tabs({ items, value, onChange }) {
   return (
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid " + T.line }}>

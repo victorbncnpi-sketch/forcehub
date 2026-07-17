@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
+import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
 
 // ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
 // Papéis: superadmin (irrestrito e imutável) · moderator (tudo, exceto alterar o super admin) · client.
@@ -483,8 +483,10 @@ function PanoramaIACard({ mkt, news, rows, analises }) {
         )}
       </div>
 
-      <div style={{ padding: "10px 14px", borderTop: "1px solid " + T.line, background: T.inset, fontSize: 11, color: T.dim, lineHeight: 1.5 }}>
-        ⚠️ {PANO_DISCLAIMER}
+      <div style={{ padding: "12px 14px", borderTop: "1px solid " + T.line, background: T.inset }}>
+        <Disclaimer title="Apenas uma sugestão">
+          {PANO_DISCLAIMER} É a leitura de um modelo de IA sobre os dados do dia — <b>não configura recomendação de investimento</b> nem garante qualquer resultado. Use como apoio à sua própria análise.
+        </Disclaimer>
       </div>
     </Card>
   );
@@ -1467,8 +1469,8 @@ function MinhaCarteira() {
       <EquityCurve positions={posicoes} title="Resultado da minha carteira" noun="posição" emptyHint="A curva aparece quando você fechar a primeira posição." />
 
       {(marcaveis > 0 || temOpcaoAberta) && (
-        <div style={{ fontSize: 11, color: T.dim, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> Ações via brapi (delay ~15min{cotAt ? " · " + fmtTime(cotAt) : ""}) · opções por fechamento (EOD).
+        <div style={{ fontSize: 12, color: T.mut, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> ⏱ Ações com <b style={{ color: T.text }}>delay ~15 min</b>{cotAt ? " · atualizado " + fmtTime(cotAt) : ""} · opções por <b style={{ color: T.text }}>fechamento (EOD)</b>.
         </div>
       )}
 
@@ -1490,9 +1492,9 @@ function MinhaCarteira() {
         </Card>
       )}
 
-      <div style={{ fontSize: 11, color: T.dim, lineHeight: 1.6, borderTop: "1px solid " + T.line, paddingTop: 12 }}>
-        ⚠️ Carteira montada por você, apenas para acompanhamento pessoal. Cotações de ações têm atraso (~15 min) e as de opções são de fechamento do pregão (EOD). Conteúdo meramente informativo — não é recomendação de compra ou venda.
-      </div>
+      <Disclaimer title="Preços com atraso · apenas acompanhamento">
+        As cotações <b>não são em tempo real</b>: ações têm atraso de <b>~15 minutos</b> e as opções usam o <b>preço de fechamento do pregão (EOD)</b> — o P&L exibido é aproximado. Carteira montada por você, só para acompanhamento pessoal; conteúdo meramente informativo e educacional, <b>não é recomendação de compra ou venda</b>.
+      </Disclaimer>
 
       {showForm && (
         <Modal title="Nova posição na minha carteira" onClose={() => setShowForm(false)}>
