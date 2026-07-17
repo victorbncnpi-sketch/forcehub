@@ -467,6 +467,12 @@ function PanoramaIACard({ mkt, news, rows, analises }) {
         <Button variant="gold" size="sm" onClick={gerar} disabled={loading}>{loading ? "⟳ Analisando..." : (cur ? "↻ Atualizar panorama" : "✨ Gerar panorama")}</Button>
       </div>
 
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid " + T.line, background: T.inset }}>
+        <Disclaimer title="Apenas uma sugestão">
+          {PANO_DISCLAIMER} É a leitura de um modelo de IA sobre os dados do dia — <b>não configura recomendação de investimento</b> nem garante qualquer resultado. Use como apoio à sua própria análise.
+        </Disclaimer>
+      </div>
+
       <div style={{ flex: 1, minHeight: 0 }}>
         {loading && <div style={{ padding: 28, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}><Spinner /><span style={{ fontSize: 12, color: T.dim }}>Montando o panorama de {PANO_ASSETS.find(a => a[0] === asset)?.[1]}...</span></div>}
         {error && !loading && <div style={{ padding: "14px 18px" }}><Banner tone="red">{error}</Banner></div>}
@@ -483,11 +489,6 @@ function PanoramaIACard({ mkt, news, rows, analises }) {
         )}
       </div>
 
-      <div style={{ padding: "12px 14px", borderTop: "1px solid " + T.line, background: T.inset }}>
-        <Disclaimer title="Apenas uma sugestão">
-          {PANO_DISCLAIMER} É a leitura de um modelo de IA sobre os dados do dia — <b>não configura recomendação de investimento</b> nem garante qualquer resultado. Use como apoio à sua própria análise.
-        </Disclaimer>
-      </div>
     </Card>
   );
 }
@@ -1458,6 +1459,10 @@ function MinhaCarteira() {
 
       {loadError && <Banner tone="gold">{loadError}</Banner>}
 
+      <Disclaimer title="Preços com atraso · apenas acompanhamento">
+        As cotações <b>não são em tempo real</b>: ações têm atraso de <b>~15 minutos</b> e as opções usam o <b>preço de fechamento do pregão (EOD)</b> — o P&L exibido é aproximado. Carteira montada por você, só para acompanhamento pessoal; conteúdo meramente informativo e educacional, <b>não é recomendação de compra ou venda</b>.
+      </Disclaimer>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
         <Stat label="Posições abertas" value={abertas.length} tone="gold" />
         <Stat label="Investido" value={"R$ " + investido.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} tone="blue" />
@@ -1491,10 +1496,6 @@ function MinhaCarteira() {
           <Pager info={pg} setPage={setPage} label="posições" />
         </Card>
       )}
-
-      <Disclaimer title="Preços com atraso · apenas acompanhamento">
-        As cotações <b>não são em tempo real</b>: ações têm atraso de <b>~15 minutos</b> e as opções usam o <b>preço de fechamento do pregão (EOD)</b> — o P&L exibido é aproximado. Carteira montada por você, só para acompanhamento pessoal; conteúdo meramente informativo e educacional, <b>não é recomendação de compra ou venda</b>.
-      </Disclaimer>
 
       {showForm && (
         <Modal title="Nova posição na minha carteira" onClose={() => setShowForm(false)}>
