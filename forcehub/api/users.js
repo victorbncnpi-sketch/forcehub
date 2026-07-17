@@ -10,7 +10,7 @@
 //     editam clientes e outros moderadores, definem papel e permissões).
 import { getRedis } from "./_redis";
 import {
-  getSession, getUsers, saveUsers, hashPassword, publicUser,
+  getSession, getUsers, saveUsers, setUserPassword, revealPassword, publicUser,
   sessionCan, SUPERADMIN, PAGE_CAPS, DEFAULT_CLIENT_PERMS, EMAIL_RE, normalizeEmail,
 } from "./_auth";
 // Sub-rotas de staff agrupadas nesta função (economia de funções na Vercel).
@@ -49,7 +49,14 @@ export default async function handler(req, res) {
     const users = await getUsers();
 
     if (req.method === "GET") {
-      const list = Object.values(users).map(publicUser);
+      // Staff (super admin/moderador) pode ver a senha atual de cada conta. A do
+      // super admin só é revelada a ele mesmo; nunca devolvemos o hash.
+      const list = Object.values(users).map(u => {
+        const pu = publicUser(u);
+        const hidePw = u.role === "superadmin" && u.user !== sess.user;
+        pu.pw = hidePw ? null : revealPassword(u);
+        return pu;
+      });
       list.sort((a, b) => a.user.localeCompare(b.user));
       return res.status(200).json({ ok: true, users: list, viewerRole: sess.role });
     }
@@ -72,8 +79,9 @@ export default async function handler(req, res) {
         const role = body.role === "moderator" ? "moderator" : "client";
         const u = {
           user: uid, name: String(body.name || uid).trim(), email, role,
-          expiry: body.expiry || null, pass: hashPassword(body.pass), createdAt: Date.now(),
+          expiry: body.expiry || null, createdAt: Date.now(),
         };
+        setUserPassword(u, body.pass);
         if (role === "client") u.perms = sanitizePerms(body.perms);
         users[uid] = u;
         await saveUsers(users);
@@ -94,7 +102,7 @@ export default async function handler(req, res) {
         if ("expiry" in body) target.expiry = body.expiry || null;
         if (body.pass) {
           if (String(body.pass).length < 6) return res.status(400).json({ ok: false, error: "A senha precisa ter ao menos 6 caracteres." });
-          target.pass = hashPassword(body.pass);
+          setUserPassword(target, body.pass);
         }
         // Papel e permissões: qualquer staff, mas nunca sobre o super admin.
         if (!targetIsSuper) {

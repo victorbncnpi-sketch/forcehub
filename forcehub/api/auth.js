@@ -94,7 +94,22 @@ export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const sess = await getSession(req);
-      return res.status(200).json({ ok: true, user: sess ? publicUser(sess) : null });
+      if (!sess) return res.status(200).json({ ok: true, user: null });
+      // Reconcilia a sessão com o registro vivo: mudanças de papel/permissões
+      // (inclusive novas capacidades padrão) passam a valer no próximo carregamento,
+      // sem exigir novo login. Regrava a sessão em Redis só se algo mudou.
+      try {
+        const users = await getUsers();
+        const live = users[sess.user];
+        if (live) {
+          const fresh = publicUser(live);
+          if (JSON.stringify(fresh) !== JSON.stringify(publicUser(sess))) {
+            await refreshSession(sess.token, live);
+          }
+          return res.status(200).json({ ok: true, user: fresh });
+        }
+      } catch (_) { /* best-effort: cai no payload da sessão */ }
+      return res.status(200).json({ ok: true, user: publicUser(sess) });
     }
 
     if (req.method === "POST") {

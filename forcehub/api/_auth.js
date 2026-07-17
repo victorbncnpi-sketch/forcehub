@@ -1,7 +1,7 @@
 // api/_auth.js — Autenticação: hash de senha (scrypt nativo) + sessões em
 // cookie httpOnly guardadas no Upstash Redis. Sem dependências externas.
 // Prefixo "_": não vira rota na Vercel.
-import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { randomBytes, scryptSync, timingSafeEqual, createCipheriv, createDecipheriv } from "crypto";
 import { getRedis } from "./_redis";
 
 const USERS_KEY = "forcehub:users";
@@ -59,6 +59,49 @@ export function generatePassword(len = 10) {
   return out;
 }
 
+// ─── Cópia recuperável da senha (para o staff visualizar/repassar) ────────────
+// O hash scrypt (u.pass) é irreversível; para permitir que super admin e
+// moderadores VEJAM a senha, guardamos uma cópia recuperável em u.pw. Se
+// PASS_ENC_KEY estiver definida, cifra em repouso (AES-256-GCM); senão, guarda
+// em texto (funciona sem configurar nada, com menor proteção do dump do banco).
+function encKey() {
+  const k = process.env.PASS_ENC_KEY || "";
+  if (!k) return null;
+  if (/^[0-9a-fA-F]{64}$/.test(k)) return Buffer.from(k, "hex");
+  try { const b = Buffer.from(k, "base64"); if (b.length === 32) return b; } catch (_) {}
+  return scryptSync(k, "forcehub:pw:v1", 32); // deriva 32 bytes de qualquer segredo
+}
+export function sealPassword(plain) {
+  const s = String(plain == null ? "" : plain);
+  const key = encKey();
+  if (!key) return { v: "plain", d: s };
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  const enc = Buffer.concat([c.update(s, "utf8"), c.final()]);
+  return { v: "gcm", d: Buffer.concat([iv, c.getAuthTag(), enc]).toString("base64") };
+}
+export function revealPassword(u) {
+  const pw = u && u.pw;
+  if (!pw || typeof pw !== "object") return null;
+  if (pw.v === "plain") return pw.d || null;
+  if (pw.v === "gcm") {
+    const key = encKey();
+    if (!key) return null; // cifrada mas sem chave -> não recuperável
+    try {
+      const raw = Buffer.from(pw.d, "base64");
+      const dc = createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
+      dc.setAuthTag(raw.subarray(12, 28));
+      return Buffer.concat([dc.update(raw.subarray(28)), dc.final()]).toString("utf8");
+    } catch (_) { return null; }
+  }
+  return null;
+}
+// Define a senha de um usuário: hash (para autenticação) + cópia recuperável.
+export function setUserPassword(u, plain) {
+  u.pass = hashPassword(plain);
+  u.pw = sealPassword(plain);
+}
+
 // ─── Modelagem / permissões ───────────────────────────────────────────────────
 export function isStaff(role) { return role === "superadmin" || role === "moderator"; }
 
@@ -73,10 +116,11 @@ export function effectivePerms(u) {
 // um usuário completo. Capacidades administrativas derivam do papel.
 export function sessionCan(s, cap) {
   if (!s) return false;
-  if (s.role === "superadmin") return true;
-  // Moderadores têm os mesmos poderes administrativos; a única exceção (não
-  // alterar o super admin) é aplicada caso a caso em api/users.js.
-  if (cap === "manage_staff" || cap === "manage_clients") return s.role === "moderator";
+  // Staff (super admin e moderador) tem acesso total às páginas e à gestão; a
+  // única exceção (não alterar o super admin) é aplicada caso a caso em
+  // api/users.js. Não depende do array `perms` congelado na sessão — assim uma
+  // capacidade nova (ex.: "portfolio") passa a valer sem precisar re-logar.
+  if (isStaff(s.role)) return true;
   const perms = Array.isArray(s.perms) ? s.perms : effectivePerms(s);
   return perms.includes(cap);
 }
@@ -128,7 +172,7 @@ export async function getUsers() {
     for (const s of SEED) {
       map[s.user] = {
         user: s.user, name: s.name, email: s.email || null, role: s.role, expiry: s.expiry,
-        pass: hashPassword(s.pass), createdAt: Date.now(),
+        pass: hashPassword(s.pass), pw: sealPassword(s.pass), createdAt: Date.now(),
         ...(s.role === "client" ? { perms: [...DEFAULT_CLIENT_PERMS] } : {}),
       };
     }

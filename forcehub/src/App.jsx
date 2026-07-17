@@ -2321,13 +2321,18 @@ const roleBadge = (r) => r === "superadmin"
   ? <Badge tone="gold">SUPER</Badge>
   : r === "moderator" ? <Badge tone="blue">MODER.</Badge> : <Badge tone="mut">CLIENTE</Badge>;
 
+// Senha legível gerada no cliente (sem caracteres ambíguos) para o staff repassar.
+const genLegPass = (len = 10) => { const a = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let o = ""; for (let i = 0; i < len; i++) o += a[Math.floor(Math.random() * a.length)]; return o; };
+
 function ClientesScreen({ session }) {
   const currentUser = session?.user;
   const isSuper = session?.role === "superadmin";
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [modal, setModal] = useState(null); // { mode, user, name, pass, role, expiry, perms, targetSuper }
+  const [modal, setModal] = useState(null); // { mode, user, name, pass, curPass, role, expiry, perms, targetSuper }
+  const [revealCur, setRevealCur] = useState(false);
+  const [revealNew, setRevealNew] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [demoMsg, setDemoMsg] = useState(null); // { ok, text }
@@ -2363,8 +2368,8 @@ function ClientesScreen({ session }) {
   };
   useEffect(() => { load(); }, []);
 
-  const openCreate = () => { setFormError(""); setModal({ mode: "create", user: "", name: "", email: "", pass: "", role: "client", expiry: "", perms: [...DEFAULT_CLIENT_PERMS], targetSuper: false }); };
-  const openEdit = (u) => { setFormError(""); setModal({ mode: "edit", user: u.user, name: u.name || "", email: u.email || "", pass: "", role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "", perms: Array.isArray(u.perms) ? [...u.perms] : [...DEFAULT_CLIENT_PERMS], targetSuper: u.role === "superadmin" }); };
+  const openCreate = () => { setFormError(""); setRevealCur(false); setRevealNew(false); setModal({ mode: "create", user: "", name: "", email: "", pass: "", curPass: null, role: "client", expiry: "", perms: [...DEFAULT_CLIENT_PERMS], targetSuper: false }); };
+  const openEdit = (u) => { setFormError(""); setRevealCur(false); setRevealNew(false); setModal({ mode: "edit", user: u.user, name: u.name || "", email: u.email || "", pass: "", curPass: u.pw || null, role: u.role, expiry: u.expiry ? String(u.expiry).slice(0, 10) : "", perms: Array.isArray(u.perms) ? [...u.perms] : [...DEFAULT_CLIENT_PERMS], targetSuper: u.role === "superadmin" }); };
 
   // Editar carteira pressupõe ler; tirar a leitura tira a edição.
   const togglePerm = (c) => setModal(m => {
@@ -2476,8 +2481,25 @@ function ClientesScreen({ session }) {
             <Field label="E-mail (opcional)" hint="Para futuros alertas e redefinição de senha.">
               <Input type="email" value={modal.email} onChange={e => setModal(m => ({ ...m, email: e.target.value }))} placeholder="ex: joao@email.com" />
             </Field>
+            {modal.mode === "edit" && (
+              <Field label="Senha atual" hint={modal.curPass ? "Visível para super admin e moderadores. Copie para repassar, ou defina uma nova abaixo." : "Definida antes deste recurso (não recuperável). Defina uma nova senha abaixo para poder visualizá-la depois."}>
+                {modal.curPass ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <Input mono readOnly type={revealCur ? "text" : "password"} value={modal.curPass} style={{ flex: 1 }} />
+                    <Button variant="ghost" size="sm" onClick={() => setRevealCur(v => !v)} style={{ whiteSpace: "nowrap" }}>{revealCur ? "Ocultar" : "Revelar"}</Button>
+                    <Button variant="ghost" size="sm" onClick={() => { try { navigator.clipboard && navigator.clipboard.writeText(modal.curPass); } catch (_) {} }} style={{ whiteSpace: "nowrap" }}>Copiar</Button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12.5, color: T.dim, fontFamily: T.mono }}>— não disponível —</div>
+                )}
+              </Field>
+            )}
             <Field label={modal.mode === "create" ? "Senha" : "Nova senha"} hint={modal.mode === "edit" ? "Deixe em branco para manter a senha atual." : "Mínimo de 6 caracteres."}>
-              <Input type="password" value={modal.pass} onChange={e => setModal(m => ({ ...m, pass: e.target.value }))} placeholder="••••••••" />
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Input type={revealNew ? "text" : "password"} value={modal.pass} onChange={e => setModal(m => ({ ...m, pass: e.target.value }))} placeholder="••••••••" style={{ flex: 1 }} mono={revealNew} />
+                <Button variant="ghost" size="sm" onClick={() => setRevealNew(v => !v)} style={{ whiteSpace: "nowrap" }}>{revealNew ? "Ocultar" : "Ver"}</Button>
+                <Button variant="ghost" size="sm" onClick={() => { setModal(m => ({ ...m, pass: genLegPass() })); setRevealNew(true); }} style={{ whiteSpace: "nowrap" }}>Gerar</Button>
+              </div>
             </Field>
             <div style={{ display: "flex", gap: 12 }}>
               {showRoleField && (
