@@ -3213,7 +3213,7 @@ function TurmaScreen({ session }) {
 
   const all = students || [];
   const rows = all.map(st => {
-    const ev = buildEvents({ manual: st.trades, valorR: st.valorR, diario: st.diario, positions: st.positions, includeCarteira });
+    const ev = buildEvents({ manual: st.trades, valorR: st.valorR, diario: st.diario, posicoes: st.positions, includeCarteira });
     const stat = computeStats(ev);
     const lastT = ev.length ? ev[ev.length - 1].t : 0;
     const peak = Math.max(0, ...stat.curveR);
