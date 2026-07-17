@@ -891,6 +891,7 @@ function PanoramaScreen({ session }) {
         <MarketBoard title="Futuros" items={srt(mkt?.groups?.futuros)} group="indices" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Moedas" items={srt(mkt?.groups?.moedas)} group="moedas" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Commodities" items={srt(mkt?.groups?.commodities)} group="commodities" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Agrícolas (B3)" items={srt(mkt?.groups?.agro)} group="agro" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} />
       </div>
 

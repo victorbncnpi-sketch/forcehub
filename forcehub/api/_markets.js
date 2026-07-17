@@ -9,10 +9,21 @@
 // A resposta é tolerante a falha parcial: cada ativo é buscado isoladamente, e
 // um ativo que falhe simplesmente não aparece (não derruba o painel).
 import { getRedis } from "./_redis";
+import { FUT, getJson, pickFront, findBarsArray, toISODate } from "./_market-data";
 
+const BRAPI_TOKEN = process.env.BRAPI_TOKEN || "";
 const KEY = "forcehub:markets";
 const TTL_S = 45;            // frescor do cache (segundos)
 const STALE_KEEP_S = 60 * 10; // mantém no Redis por 10min p/ fallback se a fonte cair
+
+// Futuros agrícolas da B3 (brapi, token PRO) — cotados em R$, atualização EOD
+// (fecham 1x/dia). asset = raiz B3: CCM=milho, ICF=café arábica, BGI=boi gordo,
+// SOJ=soja. Cache próprio (30min) pois o dado só muda no fechamento; assim o
+// Panorama (45s) não bate na brapi a cada ciclo.
+const AGRO = [["CCM", "Milho"], ["ICF", "Café"], ["BGI", "Boi Gordo"], ["SOJ", "Soja"]];
+const AGRO_KEY = "forcehub:markets:agro";
+const AGRO_FRESH_S = 30 * 60;
+const AGRO_KEEP_S = 60 * 60 * 24; // mantém 24h p/ fallback offline
 
 // Grupos de ativos: [símbolo Yahoo, rótulo].
 const GROUPS = {
@@ -104,6 +115,55 @@ async function fetchCrypto() {
   }).filter(Boolean);
 }
 
+// ─── Brapi: futuros agrícolas da B3 (EOD, em R$) ─────────────────────────────
+// Reusa o fluxo term-structure -> historical do contrato vigente (mesmo do
+// WIN/WDO). Só precisamos da série de fechamentos: preço, variação vs. pregão
+// anterior e sparkline. Não exige máx/mín (EOD agrícola às vezes só traz o
+// ajuste), então mapeia close ?? settlement sem descartar barras.
+const numOr = (v) => (v == null || v === "" || Number.isNaN(Number(v))) ? null : Number(v);
+
+async function fetchAgroAsset(asset, label) {
+  const tok = `&token=${BRAPI_TOKEN}`;
+  const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
+  const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
+  const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const front = pickFront(contracts, todayBRT);
+  if (!front) throw new Error(`agro ${asset} sem contrato vigente`);
+  const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)) || [];
+  const series = raw
+    .map(b => ({ date: toISODate(b.date), close: numOr(b.close) ?? numOr(b.settlement) }))
+    .filter(b => b.date && b.close != null)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!series.length) throw new Error(`agro ${front.symbol} sem série`);
+  const closes = series.map(b => b.close);
+  const price = closes[closes.length - 1];
+  const prev = closes.length >= 2 ? closes[closes.length - 2] : price;
+  return {
+    symbol: asset, label, contract: front.symbol,
+    price: +price.toFixed(2),
+    change: +(price - prev).toFixed(2),
+    changePct: prev ? +(((price / prev) - 1) * 100).toFixed(2) : 0,
+    time: Date.parse(series[series.length - 1].date + "T18:00:00-03:00") || Date.now(),
+    spark: downsample(closes, 32),
+  };
+}
+
+async function fetchAgro(redis) {
+  if (!BRAPI_TOKEN) return []; // sem token PRO não há futuros — some do painel
+  if (redis) {
+    try { const c = await redis.get(AGRO_KEY); if (c && c.at && (Date.now() - c.at) < AGRO_FRESH_S * 1000) return c.items || []; } catch (_) {}
+  }
+  const rows = await Promise.allSettled(AGRO.map(([a, l]) => fetchAgroAsset(a, l)));
+  const items = rows.filter(r => r.status === "fulfilled").map(r => r.value);
+  if (items.length) {
+    if (redis) { try { await redis.set(AGRO_KEY, { items, at: Date.now() }, { ex: AGRO_KEEP_S }); } catch (_) {} }
+    return items;
+  }
+  // Nada agora: devolve o último bom (stale) antes de desistir.
+  if (redis) { try { const c = await redis.get(AGRO_KEY); if (c && c.items) return c.items; } catch (_) {} }
+  return [];
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   const redis = getRedis();
@@ -121,6 +181,7 @@ export default async function handler(req, res) {
     const entries = await Promise.allSettled(Object.entries(GROUPS).map(async ([g, list]) => [g, await fetchGroup(list)]));
     for (const e of entries) if (e.status === "fulfilled") groups[e.value[0]] = e.value[1];
     try { groups.cripto = await fetchCrypto(); } catch (_) { groups.cripto = []; }
+    try { groups.agro = await fetchAgro(redis); } catch (_) { groups.agro = []; }
 
     const total = Object.values(groups).reduce((s, arr) => s + arr.length, 0);
     if (!total) throw new Error("Nenhuma cotação disponível agora.");

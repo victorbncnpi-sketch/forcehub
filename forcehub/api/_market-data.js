@@ -12,13 +12,13 @@
 import { getRedis } from "./_redis";
 
 const BRAPI_TOKEN = process.env.BRAPI_TOKEN || "";
-const FUT = "https://brapi.dev/api/v2/futures";
+export const FUT = "https://brapi.dev/api/v2/futures";
 const UA = "Mozilla/5.0 (FORCEHUB)";
 
 const num = (v) => (v == null || isNaN(Number(v)) ? null : Number(v));
 
 // fetch + parse JSON com retry leve (a API de futuros às vezes dá 404/5xx).
-async function getJson(url, tries = 3) {
+export async function getJson(url, tries = 3) {
   let last;
   for (let i = 0; i < tries; i++) {
     try { const r = await fetch(url, { headers: { "user-agent": UA } }); if (r.ok) return await r.json(); last = new Error("HTTP " + r.status); }
@@ -27,7 +27,7 @@ async function getJson(url, tries = 3) {
   throw last || new Error("falha");
 }
 
-function toISODate(d) {
+export function toISODate(d) {
   if (d == null) return null;
   if (typeof d === "number") return new Date(d * 1000).toISOString().split("T")[0];
   const s = String(d);
@@ -37,7 +37,7 @@ function toISODate(d) {
   return null;
 }
 
-function findBarsArray(obj, depth = 0) {
+export function findBarsArray(obj, depth = 0) {
   if (obj == null || depth > 5) return null;
   if (Array.isArray(obj)) {
     const first = obj.find(x => x && typeof x === "object");
@@ -85,7 +85,7 @@ async function fetchIbovBars(numDays) {
 // Fluxo: term-structure (descobre o contrato) -> historical desse contrato.
 // Escolhe o contrato vigente: o de vencimento MAIS PRÓXIMO ainda não vencido (o
 // mais líquido). Não confiar na ordem do array — ordenar pela data de vencimento.
-function pickFront(contracts, todayBRT) {
+export function pickFront(contracts, todayBRT) {
   const valid = (contracts || []).filter(c => c && c.symbol);
   const dated = valid.filter(c => c.expirationDate);
   if (!dated.length) return valid[0] || null;
@@ -146,6 +146,31 @@ export default async function handler(req, res) {
           const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)) || [];
           out[asset].recentRaw = raw.slice(-14).map(b => ({ date: toISODate(b.date), high: b.high ?? null, low: b.low ?? null, close: (b.close ?? b.settlement) ?? null }));
           out[asset].keptDates = mapBars(raw).slice(-14).map(b => b.date);
+        }
+      } catch (e) { out[asset].error = String((e && e.message) || e); }
+    }
+    return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
+  }
+
+  // Diagnóstico dos futuros agrícolas: /api/market-data?probe=agro
+  // Confirma quais códigos-raiz (asset) a brapi reconhece e mostra o contrato
+  // vigente + últimos fechamentos. Inclui alternativas de soja para acharmos a
+  // raiz correta no ambiente com token (a brapi bloqueia acesso local aqui).
+  if (req.query.probe === "agro") {
+    const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+    const todayBRT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const out = {};
+    for (const asset of ["CCM", "ICF", "BGI", "SOJ", "SFI", "SJC", "SOY"]) {
+      out[asset] = {};
+      try {
+        const ts = await getJson(`${FUT}/term-structure?asset=${asset}${tok}`);
+        const contracts = Array.isArray(ts && ts.contracts) ? ts.contracts : [];
+        out[asset].contracts = contracts.map(c => ({ symbol: c.symbol, exp: c.expirationDate || null }));
+        const front = pickFront(contracts, todayBRT);
+        out[asset].front = front ? front.symbol : null;
+        if (front) {
+          const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(front.symbol)}${tok}`)) || [];
+          out[asset].recentRaw = raw.slice(-8).map(b => ({ date: toISODate(b.date), close: (b.close ?? b.settlement) ?? null }));
         }
       } catch (e) { out[asset].error = String((e && e.message) || e); }
     }
