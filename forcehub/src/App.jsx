@@ -420,7 +420,17 @@ function PanoramaIACard({ mkt, news, rows, analises }) {
   const [asset, setAsset] = useState("IBOV");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [result, setResult] = useState(null); // { asset, text, at }
+  const [stored, setStored] = useState({}); // compartilhado: { WIN, IBOV, WDO } -> { text, generatedAt, by }
+
+  // Carrega o panorama compartilhado (cacheado para todos, como as notícias).
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try { const j = await api.get("/api/analise?panorama=1"); if (on && j.panoramas) setStored(j.panoramas); }
+      catch (e) { /* segue sem cache */ }
+    })();
+    return () => { on = false; };
+  }, []);
 
   const gerar = async () => {
     setLoading(true); setError(null);
@@ -430,16 +440,22 @@ function PanoramaIACard({ mkt, news, rows, analises }) {
       const data = await callAI({ system: PANO_SYS, max_tokens: 1600, messages: [{ role: "user", content: userMsg }] });
       const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
       if (!text) throw new Error("A IA não retornou o panorama agora. Tente novamente em instantes.");
-      setResult({ asset: alvo, text, at: Date.now() });
+      let entry = { ativo: alvo, text, generatedAt: Date.now() };
+      // Persiste para todos (não quebra a exibição se a gravação falhar).
+      try { const j = await api.post("/api/analise?panorama=1", { ativo: alvo, text }); if (j.panorama) entry = j.panorama; }
+      catch (e) { /* mostra local mesmo sem persistir */ }
+      setStored(s => ({ ...s, [alvo]: entry }));
     } catch (e) { setError(e.message); }
     setLoading(false);
   };
+
+  const cur = stored[asset] || null;
 
   return (
     <Card style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid " + T.line, background: T.panel2 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: T.text, display: "flex", alignItems: "center", gap: 8 }}>🧭 Panorama IA — direcional do dia</div>
-        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Escolha o ativo e a IA monta um panorama e opinião de direcional (hoje e próximos dias) com as cotações e notícias atuais.</div>
+        <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Escolha o ativo e a IA monta um panorama e opinião de direcional (hoje e próximos dias). O resultado fica salvo e compartilhado para todos.</div>
       </div>
 
       <div style={{ padding: "12px 14px", borderBottom: "1px solid " + T.line, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
@@ -448,19 +464,19 @@ function PanoramaIACard({ mkt, news, rows, analises }) {
             <button key={k} onClick={() => { setAsset(k); setError(null); }} style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", background: asset === k ? T.goldSoft : "transparent", color: asset === k ? T.gold : T.mut }}>{l}</button>
           ))}
         </div>
-        <Button variant="gold" size="sm" onClick={gerar} disabled={loading}>{loading ? "⟳ Analisando..." : "✨ Gerar panorama"}</Button>
+        <Button variant="gold" size="sm" onClick={gerar} disabled={loading}>{loading ? "⟳ Analisando..." : (cur ? "↻ Atualizar panorama" : "✨ Gerar panorama")}</Button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
         {loading && <div style={{ padding: 28, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}><Spinner /><span style={{ fontSize: 12, color: T.dim }}>Montando o panorama de {PANO_ASSETS.find(a => a[0] === asset)?.[1]}...</span></div>}
         {error && !loading && <div style={{ padding: "14px 18px" }}><Banner tone="red">{error}</Banner></div>}
-        {!loading && !error && result && (
+        {!loading && !error && cur && (
           <div style={{ padding: "14px 18px" }}>
-            <div style={{ fontSize: 11, color: T.dim, marginBottom: 8 }}>{PANO_AI_LABEL[result.asset] || result.asset} · {fmtTime(result.at)}</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{renderAnalise(result.text)}</div>
+            <div style={{ fontSize: 11, color: T.dim, marginBottom: 8 }}>{PANO_AI_LABEL[asset] || asset} · atualizado {fmtTime(cur.generatedAt)} · compartilhado</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{renderAnalise(cur.text)}</div>
           </div>
         )}
-        {!loading && !error && !result && (
+        {!loading && !error && !cur && (
           <div style={{ padding: 26, textAlign: "center", fontSize: 13, color: T.dim, lineHeight: 1.6 }}>
             Selecione <b style={{ color: T.mut }}>Índice</b>, <b style={{ color: T.mut }}>IBOV</b> ou <b style={{ color: T.mut }}>Dólar</b> e toque em <b style={{ color: T.gold }}>Gerar panorama</b>.
           </div>
@@ -919,9 +935,8 @@ function PanoramaScreen({ session }) {
         {favItems.length > 0 && <MarketBoard title="⭐ Favoritos" items={favItems} favs={favSet} onToggleFav={toggleFav} reorderable onReorder={reorderFavs} />}
         <MarketBoard title="Índices" items={srt(mkt?.groups?.indices)} group="indices" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Futuros" items={srt(mkt?.groups?.futuros)} group="indices" favs={favSet} onToggleFav={toggleFav} />
-        <MarketBoard title="Moedas" items={srt(mkt?.groups?.moedas)} group="moedas" favs={favSet} onToggleFav={toggleFav} />
+        <MarketBoard title="Juros e Moedas" items={srt([...(mkt?.groups?.juros || []).map(x => ({ ...x, _group: "juros" })), ...(mkt?.groups?.moedas || [])])} group="moedas" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Commodities" items={srt(mkt?.groups?.commodities)} group="commodities" favs={favSet} onToggleFav={toggleFav} />
-        <MarketBoard title="Juros — DI 1 dia" items={srt(mkt?.groups?.juros)} group="juros" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} />
       </div>
 

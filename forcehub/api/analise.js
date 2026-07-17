@@ -12,6 +12,7 @@ import { getSession, sessionCan, isStaff } from "./_auth";
 const ATIVOS = ["WIN", "WDO", "IBOV"];
 const LABELS = { WIN: "Mini Índice (WIN) — futuro do Ibovespa", WDO: "Mini Dólar (WDO) — futuro do dólar", IBOV: "Ibovespa (índice à vista)" };
 const KEY = "forcehub:analise";
+const PANO_KEY = "forcehub:panorama"; // panorama IA compartilhado (cacheado p/ todos)
 const imgKey = (a) => "forcehub:analise:img:" + a;
 const MAX_IMG = 1100 * 1024; // ~1.1MB (dataURL) — margem sob o limite do Upstash
 
@@ -57,6 +58,30 @@ export default async function handler(req, res) {
   if (!sessionCan(sess, "panorama")) return res.status(403).json({ ok: false, error: "Sem acesso ao Panorama." });
 
   try {
+    // Panorama IA compartilhado: gerado por qualquer usuário do Panorama e
+    // cacheado para todos (como as notícias). GET lê; POST publica o texto.
+    if (req.query.panorama) {
+      if (req.method === "GET") {
+        const data = (await redis.get(PANO_KEY)) || {};
+        const panoramas = {};
+        for (const a of ATIVOS) panoramas[a] = data[a] || null;
+        return res.status(200).json({ ok: true, panoramas });
+      }
+      if (req.method === "POST") {
+        let body = req.body;
+        if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+        const a = String((body && body.ativo) || "").toUpperCase();
+        if (!ATIVOS.includes(a)) return res.status(400).json({ ok: false, error: "Ativo inválido." });
+        const text = String((body && body.text) || "").trim().slice(0, 8000);
+        if (!text) return res.status(400).json({ ok: false, error: "Texto do panorama vazio." });
+        const data = (await redis.get(PANO_KEY)) || {};
+        data[a] = { ativo: a, text, generatedAt: Date.now(), by: sess.name || sess.user };
+        await redis.set(PANO_KEY, data);
+        return res.status(200).json({ ok: true, panorama: data[a] });
+      }
+      return res.status(405).json({ ok: false, error: "Método não permitido" });
+    }
+
     // Imagem (print) de um ativo.
     if (req.query.img) {
       const a = String(req.query.img).toUpperCase();
