@@ -3028,7 +3028,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
       ].join("\n");
       const data = await callAI({
         system: "Você é O Conselheiro, coach de trading na B3, direto, técnico e empático — de trader para trader. Analise as estatísticas de performance e responda em português com: (1) um diagnóstico curto, (2) pontos fortes, (3) pontos de atenção e (4) 2 a 3 recomendações práticas. Use os conceitos de R-múltiplo, payoff, expectativa matemática e SQN. Não use tabelas; use parágrafos curtos e bullets com '-'.",
-        messages: [{ role: "user", content: (targetName ? "Estatísticas do aluno " + targetName + " (analise para o mentor):\n" : "Minhas estatísticas de trading:\n") + resumo }],
+        messages: [{ role: "user", content: (targetName ? "Estatísticas do aluno " + targetName + " (analise para o mentor):\n" : "Minhas estatísticas de trading:\n") + "Conta: " + ACCOUNT_LABEL[acc] + (acc === "sim" ? " (simulador — operações de treino, sem risco real; considere isso no tom)" : "") + "\n" + resumo }],
         max_tokens: 1100,
       });
       const txt = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
