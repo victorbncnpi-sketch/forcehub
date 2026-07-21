@@ -975,6 +975,14 @@ const tradePot = (x) => { const r = ((x.alvo - x.entrada) / x.entrada) * 100; re
 const tradeRisco = (x) => { const r = ((x.stop - x.entrada) / x.entrada) * 100; return tradeDir(x) === "VENDA" ? -r : r; }; // risco até o stop (%) — negativo
 const closePct = (p, saida) => { const r = ((saida - p.entrada) / p.entrada) * 100; return tradeDir(p) === "VENDA" ? -r : r; };
 
+// Sugestão padrão de alvo/stop (±5% da entrada, direção-aware) para o formulário
+// de recomendação. Compra: alvo acima / stop abaixo · Venda: o inverso. Apenas
+// pré-preenche — o analista pode sobrescrever livremente.
+const DEF_ALVO_STOP_PCT = 5;
+const sugAlvo = (entrada, dir) => { const v = parseFloat(entrada); return v > 0 ? v * (dir === "VENDA" ? 1 - DEF_ALVO_STOP_PCT / 100 : 1 + DEF_ALVO_STOP_PCT / 100) : null; };
+const sugStop = (entrada, dir) => { const v = parseFloat(entrada); return v > 0 ? v * (dir === "VENDA" ? 1 + DEF_ALVO_STOP_PCT / 100 : 1 - DEF_ALVO_STOP_PCT / 100) : null; };
+const fmt2 = (n) => (n == null || isNaN(n)) ? "" : String(+Number(n).toFixed(2));
+
 // ─── Cotação ao vivo na Carteira (marcação a mercado) ────────────────────────
 const liveResult = (item, price) => closePct(item, price); // % desde a entrada (direção-aware)
 const hitTarget = (item, price) => tradeDir(item) === "VENDA" ? price <= Number(item.alvo) : price >= Number(item.alvo);
@@ -1611,9 +1619,12 @@ function CarteiraRow({ p, cot, onFechar, onRemove }) {
   );
 }
 
-function CarteiraScreen({ canWrite, canPortfolio }) {
+function CarteiraScreen({ session, canWrite, canPortfolio }) {
+  const uid = session?.user;
   const [acoes, setAcoes] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
+  const [incluirDiario, setIncluirDiario] = useState(() => getIncluirCarteira(session?.user));
+  const [diarioMsg, setDiarioMsg] = useState("");
   const [aba, setAba] = useState("carteira");
   const [showForm, setShowForm] = useState(false);
   const [posPage, setPosPage] = useState(1);
@@ -1650,6 +1661,9 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
         setPosicoes(p.posicoes || []);
         const ids = [...(c.recomendacoes || []), ...(p.posicoes || [])].flatMap(x => [x.id || 0, x.posId || 0, x.recId || 0]);
         idRef.current = Math.max(0, ...ids) + 1;
+        // Se o envio ao Diário estiver ativo, exporta encerradas (inclui as que o
+        // servidor fechou por alvo/stop desde a última visita). Idempotente.
+        if (getIncluirCarteira(uid)) syncCarteiraToDiario(p.posicoes || [], uid);
       } catch (e) { if (active) setLoadError(e.message); }
       finally { if (active) setLoaded(true); }
     })();
@@ -1683,6 +1697,23 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
   };
 
   const setF = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  // Ao digitar a entrada, pré-preenche alvo/stop na sugestão de 5% — mas só se o
+  // campo estiver vazio ou ainda no valor sugerido (nunca sobrescreve um valor
+  // que o analista digitou). Mesma regra ao trocar a direção (compra <-> venda).
+  const onEntradaChange = (v) => setForm(p => {
+    const next = { ...p, entrada: v };
+    const prevA = fmt2(sugAlvo(p.entrada, p.direcao)), prevS = fmt2(sugStop(p.entrada, p.direcao));
+    if (p.alvo === "" || p.alvo === prevA) next.alvo = fmt2(sugAlvo(v, p.direcao));
+    if (p.stop === "" || p.stop === prevS) next.stop = fmt2(sugStop(v, p.direcao));
+    return next;
+  });
+  const onDirecaoChange = (dir) => setForm(p => {
+    const next = { ...p, direcao: dir };
+    const prevA = fmt2(sugAlvo(p.entrada, p.direcao)), prevS = fmt2(sugStop(p.entrada, p.direcao));
+    if (p.alvo === "" || p.alvo === prevA) next.alvo = fmt2(sugAlvo(p.entrada, dir));
+    if (p.stop === "" || p.stop === prevS) next.stop = fmt2(sugStop(p.entrada, dir));
+    return next;
+  });
   const calcRR = (e, a, s) => {
     const ev = parseFloat(e), av = parseFloat(a), sv = parseFloat(s);
     if (!ev || !av || !sv || isNaN(ev) || isNaN(av) || isNaN(sv)) return null;
@@ -1762,6 +1793,17 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
       return { ...p, status: "FECHADA", precoSaida, dataSaida: new Date().toLocaleDateString("pt-BR"), resultado: parseFloat(pct.toFixed(2)) };
     });
     setPosicoes(nextPos); savePos(nextPos);
+    // Envia a operação recém-encerrada ao Diário (se o toggle estiver ativo).
+    if (getIncluirCarteira(uid)) runSyncDiario(nextPos);
+  };
+  // Liga/desliga o envio ao Diário. Ao ligar, exporta de imediato as encerradas.
+  const runSyncDiario = async (poss) => {
+    try { const n = await syncCarteiraToDiario(poss || posicoes, uid); if (n > 0) setDiarioMsg("✓ " + n + (n > 1 ? " operações enviadas" : " operação enviada") + " ao Diário de Trades."); }
+    catch (_) {}
+  };
+  const toggleDiario = (v) => {
+    setIncluirDiario(v); setIncluirCarteiraPref(uid, v); setDiarioMsg("");
+    if (v) runSyncDiario(posicoes);
   };
   const scan = async () => {
     setScanning(true); setScanError(null); setScanResult(null);
@@ -1934,6 +1976,10 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
 
       {loaded && aba === "posicoes" && (
         <>
+          <Disclaimer title="Acompanhamento · preços com atraso">
+            Ao aceitar uma recomendação você passa a <b>acompanhar</b> a operação: as cotações têm <b>atraso de ~15 minutos</b> e o alvo/stop são conferidos pelo servidor a cada ~10 min — o P&amp;L é aproximado. Aceitar <b>não é executar</b> a ordem na sua corretora nem é recomendação de compra ou venda; conteúdo educacional.
+          </Disclaimer>
+
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
             <Stat label="Abertas" value={abertas - aguardandoPos} tone="gold" />
             <Stat label="Aguardando" value={aguardandoPos} tone="mut" />
@@ -1941,6 +1987,21 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
             <Stat label="Rent. média" value={(resultadoTotal >= 0 ? "+" : "") + resultadoTotal.toFixed(2) + "%"} tone={resultadoTotal >= 0 ? "green" : "red"} />
             <Stat label="Acumulado" value={(acumulado >= 0 ? "+" : "") + acumulado.toFixed(2) + "%"} tone={acumulado >= 0 ? "green" : "red"} />
             <Stat label="Total ops" value={posicoes.length} tone="blue" />
+          </div>
+
+          {/* Enviar operações encerradas ao Diário de Trades (linhas editáveis) */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", background: T.inset, border: "1px solid " + (incluirDiario ? T.lineGold : T.line), borderRadius: 10, padding: "12px 15px" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: T.text }}>Enviar operações encerradas ao Diário de Trades</div>
+              <div style={{ fontSize: 12, color: T.mut, marginTop: 3, lineHeight: 1.5 }}>Cada posição fechada (manual ou por alvo/stop) vira uma <b>linha editável</b> no seu Diário, sem duplicar. Também passa a contar no Dashboard (conta real). {diarioMsg && <b style={{ color: T.gold }}>{diarioMsg}</b>}</div>
+            </div>
+            <button className="fh-btn" onClick={() => toggleDiario(!incluirDiario)}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (incluirDiario ? T.lineGold : T.line), background: incluirDiario ? T.goldSoft : "transparent", color: incluirDiario ? T.gold : T.mut, flexShrink: 0 }}>
+              <span style={{ width: 30, height: 16, borderRadius: 10, background: incluirDiario ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
+                <span style={{ position: "absolute", top: 2, left: incluirDiario ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
+              </span>
+              {incluirDiario ? "Ativado" : "Desativado"}
+            </button>
           </div>
 
           <EquityCurve positions={posicoes} />
@@ -2030,7 +2091,7 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
               <div style={{ display: "flex", gap: 8 }}>
                 {[["COMPRA", "▲ Compra", T.green], ["VENDA", "▼ Venda", T.red]].map(([v, l, c]) => {
                   const on = form.direcao === v;
-                  return <button key={v} className="fh-btn" onClick={() => setF("direcao", v)} style={{ flex: 1, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? c + "88" : T.line), background: on ? c + "1a" : "transparent", color: on ? c : T.mut }}>{l}</button>;
+                  return <button key={v} className="fh-btn" onClick={() => onDirecaoChange(v)} style={{ flex: 1, padding: "9px 12px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "1px solid " + (on ? c + "88" : T.line), background: on ? c + "1a" : "transparent", color: on ? c : T.mut }}>{l}</button>;
                 })}
               </div>
             </Field>
@@ -2049,8 +2110,11 @@ function CarteiraScreen({ canWrite, canPortfolio }) {
               </div>
             </Field>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-              {[["Entrada (R$)", "entrada", T.text], ["Alvo (R$)", "alvo", T.green], ["Stop (R$)", "stop", T.red]].map(([l, k, c]) => (
-                <Field key={k} label={l}><Input mono type="number" step="0.01" value={form[k]} onChange={e => setF(k, e.target.value)} placeholder="0.00" style={{ color: c }} /></Field>
+              <Field label="Entrada (R$)" hint={`Preenche alvo/stop em ${DEF_ALVO_STOP_PCT}%`}>
+                <Input mono type="number" step="0.01" value={form.entrada} onChange={e => onEntradaChange(e.target.value)} placeholder="0.00" style={{ color: T.text }} />
+              </Field>
+              {[["Alvo (R$)", "alvo", T.green], ["Stop (R$)", "stop", T.red]].map(([l, k, c]) => (
+                <Field key={k} label={l} hint="Sugestão editável"><Input mono type="number" step="0.01" value={form[k]} onChange={e => setF(k, e.target.value)} placeholder="0.00" style={{ color: c }} /></Field>
               ))}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 12 }}>
@@ -2746,6 +2810,65 @@ function Pager({ info, setPage, label = "itens" }) {
   );
 }
 
+// ─── Carteira -> Diário de Trades (linhas editáveis, com dedup) ──────────────
+// Quando o usuário ativa "incluir carteira", cada posição ENCERRADA da carteira
+// vira uma linha normal (editável) no Diário, marcada com ext="carteira:<posId>"
+// para nunca duplicar. A visibilidade no Diário e no Dashboard segue o mesmo
+// toggle (persistido por usuário). Preferência guardada no navegador.
+const CART_EXT_PREFIX = "carteira:";
+const isCartRow = (t) => typeof (t && t.ext) === "string" && t.ext.startsWith(CART_EXT_PREFIX);
+const cartExtOf = (posId) => CART_EXT_PREFIX + posId;
+const incluirCartKey = (u) => "fh:incluirCarteira:" + (u || "anon");
+function getIncluirCarteira(u) { try { return localStorage.getItem(incluirCartKey(u)) === "1"; } catch (_) { return false; } }
+function setIncluirCarteiraPref(u, v) { try { localStorage.setItem(incluirCartKey(u), v ? "1" : "0"); } catch (_) {} }
+// Posições já exportadas ao Diário — para não re-adicionar uma linha que o
+// usuário apagou de propósito (respeita a exclusão, além do dedup por ext).
+const cartExportedKey = (u) => "fh:cartExportados:" + (u || "anon");
+function getCartExported(u) { try { return new Set(JSON.parse(localStorage.getItem(cartExportedKey(u)) || "[]")); } catch (_) { return new Set(); } }
+function addCartExported(u, ids) { try { const s = getCartExported(u); ids.forEach(i => s.add(i)); localStorage.setItem(cartExportedKey(u), JSON.stringify([...s])); } catch (_) {} }
+// dd/mm/aaaa -> aaaa-mm-dd (formato que o diário exige).
+const isoFromBR = (s) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(s || "")); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
+
+// Envia ao Diário (conta real) as posições encerradas ainda não exportadas.
+// Idempotente: deduplica pela chave ext E por um registro local de exportadas
+// (assim uma linha apagada de propósito não volta). Retorna o nº de linhas novas.
+async function syncCarteiraToDiario(positions, uid) {
+  const closed = (positions || []).filter(p => p && p.posId != null && p.resultado != null && (p.status === "FECHADA" || p.status === "ENCERRADA"));
+  if (!closed.length) return 0;
+  let cur;
+  try { cur = await api.get("/api/trades?account=real"); } catch (_) { return 0; }
+  const trades = Array.isArray(cur.trades) ? cur.trades : [];
+  const valorR = cur.valorR || null;
+  const seen = new Set(trades.map(t => t && t.ext).filter(Boolean));
+  const exported = getCartExported(uid);
+  let maxId = trades.reduce((m, t) => Math.max(m, Number(t && t.id) || 0), 0);
+  const novos = [];
+  const novosIds = [];
+  for (const p of closed) {
+    const ext = cartExtOf(p.posId);
+    if (seen.has(ext) || exported.has(p.posId)) continue;
+    const data = isoFromBR(p.dataSaida) || isoFromBR(p.dataEntrada);
+    if (!data) continue;
+    const riscoPct = Math.abs(tradeRisco(p));
+    const r = riscoPct ? +(p.resultado / riscoPct).toFixed(3) : null;
+    const fin = r != null && valorR ? +(r * valorR).toFixed(2) : null;
+    const motivo = p.fechadoAuto ? (p.motivoFechamento === "alvo" ? "alvo automático" : "stop automático") : "encerrada manualmente";
+    novos.push({
+      id: ++maxId, data, ativo: (p.ticker || "").toUpperCase() || null, direcao: tradeDir(p),
+      r, fin, setup: "Carteira" + (p.ai ? " · IA" : ""),
+      notas: [p.nome, motivo, p.resultado != null ? (p.resultado >= 0 ? "+" : "") + p.resultado.toFixed(2) + "%" : null].filter(Boolean).join(" · "),
+      ext,
+    });
+    seen.add(ext); novosIds.push(p.posId);
+  }
+  if (!novos.length) return 0;
+  try {
+    await api.post("/api/trades?account=real", { trades: [...trades, ...novos], valorR });
+    addCartExported(uid, novosIds);
+    return novos.length;
+  } catch (_) { return 0; }
+}
+
 // Converte cada fonte num "evento" comum (R quando possível, e R$).
 function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
   const ev = [];
@@ -2757,7 +2880,7 @@ function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
     if (r == null && fin != null && valorR) r = +(fin / valorR).toFixed(3);
     if (fin == null && r != null && valorR) fin = +(r * valorR).toFixed(2);
     const t = toTime(m.data);
-    ev.push({ id: "m" + m.id, srcId: m.id, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: m.ativo || null, direcao: m.direcao || null, r, fin, setup: m.setup || "", notas: m.notas || "", fonte: "manual" });
+    ev.push({ id: "m" + m.id, srcId: m.id, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: m.ativo || null, direcao: m.direcao || null, r, fin, setup: m.setup || "", notas: m.notas || "", fonte: "manual", cart: isCartRow(m) });
   });
   (diario || []).forEach((d, i) => {
     const fin = typeof d.resultado === "number" ? d.resultado : null;
@@ -2766,7 +2889,11 @@ function buildEvents({ manual, valorR, diario, posicoes, includeCarteira }) {
     ev.push({ id: "c" + i, srcIdx: i, t, ym: ymOf(t), dia: new Date(t).getDay(), ativo: null, direcao: null, r, fin, setup: "", notas: d.reflexao || d.dificuldade || "", fonte: "conselheiro" });
   });
   if (includeCarteira) {
-    (posicoes || []).filter(p => p.resultado != null && p.status !== "ABERTA").forEach(p => {
+    // Rede de segurança: conta as posições encerradas que AINDA não viraram linha
+    // no Diário (ext "carteira:<posId>"). As já exportadas entram via `manual`,
+    // então filtramos aqui para nunca somar duas vezes.
+    const inDiary = new Set((manual || []).filter(isCartRow).map(m => m.ext));
+    (posicoes || []).filter(p => p.resultado != null && p.status !== "ABERTA" && !inDiary.has(cartExtOf(p.posId))).forEach(p => {
       const riscoPct = Math.abs(tradeRisco(p));
       const r = riscoPct ? +(p.resultado / riscoPct).toFixed(3) : null;
       const fin = r != null && valorR ? +(r * valorR).toFixed(2) : null;
@@ -3227,7 +3354,11 @@ function TradesScreen({ session, account = "real", setAccount }) {
     setPreview(null);
   };
 
-  const events = buildEvents({ manual: trades, valorR, diario, posicoes: [], includeCarteira: false });
+  // Linhas vindas da Carteira (ext "carteira:") só aparecem no Diário quando o
+  // toggle "incluir carteira" está ativo — mesma preferência usada no Dashboard.
+  const mostrarCarteira = getIncluirCarteira(userId);
+  const eventsManual = mostrarCarteira ? trades : (trades || []).filter(t => !isCartRow(t));
+  const events = buildEvents({ manual: eventsManual, valorR, diario, posicoes: [], includeCarteira: false });
   const lista = [...events].sort((a, b) => b.t - a.t);
   const pg = pageInfo(lista, page, 10);
 
@@ -3367,7 +3498,7 @@ function TradesScreen({ session, account = "real", setAccount }) {
                 {pg.slice.map(e => (
                   <div key={e.id} style={{ display: "grid", gridTemplateColumns: "92px 110px 1fr 90px 100px 76px", gap: 8, padding: "11px 16px", borderBottom: "1px solid " + T.line, alignItems: "center", fontFamily: T.mono }}>
                     <div style={{ fontSize: 12, color: T.mut }}>{e.t ? dmy(e.t) : "—"}</div>
-                    <div><Badge tone={FONTE_TONE[e.fonte]}>{FONTE_LABEL[e.fonte]}</Badge></div>
+                    <div><Badge tone={e.cart ? FONTE_TONE.carteira : FONTE_TONE[e.fonte]}>{e.cart ? FONTE_LABEL.carteira : FONTE_LABEL[e.fonte]}</Badge></div>
                     <div style={{ fontFamily: T.sans }}>
                       <span style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>{e.ativo || "—"}</span>
                       {e.direcao && <span style={{ fontSize: 10, marginLeft: 6, color: e.direcao === "VENDA" ? T.red : T.green, fontWeight: 700 }}>{e.direcao === "VENDA" ? "▼" : "▲"}</span>}
@@ -3409,7 +3540,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
   const [valorR, setValorR] = useState(null);
   const [diario, setDiario] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
-  const [includeCarteira, setIncludeCarteira] = useState(false);
+  const [includeCarteira, setIncludeCarteira] = useState(() => getIncluirCarteira(uid));
   const [periodo, setPeriodo] = useState("tudo");
   const [ativoF, setAtivoF] = useState("todos");
   const [curveUnit, setCurveUnit] = useState("R");
@@ -3433,7 +3564,12 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
     return () => { alive = false; };
   }, [uid, acc]);
 
-  const allEvents = buildEvents({ manual: trades, valorR, diario, posicoes, includeCarteira });
+  // Carteira só na conta real. Com o toggle ON, as encerradas contam via Diário
+  // (linhas "carteira:") mais as ainda não exportadas (dedup em buildEvents);
+  // com OFF, filtramos essas linhas para não contarem no Dashboard.
+  const cartOn = acc === "real" && includeCarteira;
+  const manualEv = cartOn ? trades : (trades || []).filter(t => !isCartRow(t));
+  const allEvents = buildEvents({ manual: manualEv, valorR, diario, posicoes: cartOn ? posicoes : [], includeCarteira: cartOn });
   const ativosDisp = Array.from(new Set(allEvents.map(e => e.ativo).filter(Boolean))).sort();
   const cutoff = periodo === "30d" ? Date.now() - 30 * 864e5 : periodo === "90d" ? Date.now() - 90 * 864e5 : periodo === "ano" ? new Date(new Date().getFullYear(), 0, 1).getTime() : 0;
   const events = allEvents.filter(e => (!cutoff || e.t >= cutoff) && (ativoF === "todos" || e.ativo === ativoF));
@@ -3510,7 +3646,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
           <div style={{ fontSize: 13, color: T.dim }}>Base: <b style={{ color: T.text }}>{s.n}</b> operações · manual + Conselheiro{acc === "real" && includeCarteira ? " + carteira" : ""}</div>
           {acc === "real" && (
-            <button className="fh-btn" onClick={() => setIncludeCarteira(v => !v)}
+            <button className="fh-btn" onClick={() => setIncludeCarteira(v => { const nv = !v; if (ownDash) setIncluirCarteiraPref(uid, nv); return nv; })}
               style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, border: "1px solid " + (includeCarteira ? T.lineGold : T.line), background: includeCarteira ? T.goldSoft : "transparent", color: includeCarteira ? T.gold : T.mut }}>
               <span style={{ width: 30, height: 16, borderRadius: 10, background: includeCarteira ? T.gold : T.line, position: "relative", transition: "all .15s" }}>
                 <span style={{ position: "absolute", top: 2, left: includeCarteira ? 16 : 2, width: 12, height: 12, borderRadius: "50%", background: "#0a0a0b", transition: "all .15s" }} />
@@ -3643,7 +3779,10 @@ function TurmaScreen({ session }) {
 
   const all = students || [];
   const rows = all.map(st => {
-    const ev = buildEvents({ manual: st.trades, valorR: st.valorR, diario: st.diario, posicoes: st.positions, includeCarteira });
+    // Com o toggle OFF, remove as linhas "carteira:" do diário do aluno; com ON,
+    // conta-as (mais as posições ainda não exportadas, deduplicadas em buildEvents).
+    const manualAluno = includeCarteira ? st.trades : (st.trades || []).filter(t => !isCartRow(t));
+    const ev = buildEvents({ manual: manualAluno, valorR: st.valorR, diario: st.diario, posicoes: includeCarteira ? st.positions : [], includeCarteira });
     const stat = computeStats(ev);
     const lastT = ev.length ? ev[ev.length - 1].t : 0;
     const peak = Math.max(0, ...stat.curveR);
@@ -3847,7 +3986,7 @@ export default function App() {
       <GlobalStyle />
       <Shell session={session} active={current} onNavigate={setActive} onLogout={logout} onUpdateSession={setSession}>
         {current === "panorama" && <PanoramaScreen session={session} />}
-        {current === "carteira" && <CarteiraScreen canWrite={can(session, "carteira_write")} canPortfolio={can(session, "portfolio")} />}
+        {current === "carteira" && <CarteiraScreen session={session} canWrite={can(session, "carteira_write")} canPortfolio={can(session, "portfolio")} />}
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} account={account} setAccount={setAccount} />}
         {current === "trades" && <TradesScreen session={session} account={account} setAccount={setAccount} />}
         {current === "dashboard" && <DashboardScreen session={session} account={account} setAccount={setAccount} />}
