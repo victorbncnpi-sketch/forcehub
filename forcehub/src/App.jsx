@@ -1805,17 +1805,45 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     setIncluirDiario(v); setIncluirCarteiraPref(uid, v); setDiarioMsg("");
     if (v) runSyncDiario(posicoes);
   };
+  // Completa/valida as oportunidades da IA com a cotação REAL da brapi. A IA às
+  // vezes traz ideias sem níveis numéricos (ex.: uma recomendação de casa de
+  // análise) — aqui usamos o preço de mercado como entrada e a sugestão de 5%
+  // para alvo/stop, além de sinalizar quando o preço da IA destoa do mercado.
+  const enrichOpsComBrapi = async (ops) => {
+    const tickers = [...new Set(ops.map(o => o.ticker).filter(Boolean))];
+    let quotes = {};
+    if (tickers.length) {
+      try { const j = await api.get("/api/cotacoes?tickers=" + encodeURIComponent(tickers.join(","))); quotes = (j && j.quotes) || {}; } catch (_) {}
+    }
+    return ops.map(o => {
+      const q = quotes[o.ticker];
+      const preco = q && q.price != null ? q.price : null;
+      const dir = o.direcao === "VENDA" ? "VENDA" : "COMPRA";
+      let entrada = o.entrada, alvo = o.alvo, stop = o.stop;
+      const flags = { entradaAuto: false, alvoAuto: false, stopAuto: false, semCotacao: preco == null, divergente: false, statusPreco: q && q.stale ? "stale" : (preco != null ? "vivo" : "indisp") };
+      if (entrada == null && preco != null) { entrada = +preco.toFixed(2); flags.entradaAuto = true; } // entrada a mercado
+      if (entrada != null && preco != null && Math.abs(entrada - preco) / preco > 0.15) flags.divergente = true; // preço da IA velho/errado
+      if (alvo == null && entrada != null) { const s = sugAlvo(entrada, dir); if (s != null) { alvo = +s.toFixed(2); flags.alvoAuto = true; } }
+      if (stop == null && entrada != null) { const s = sugStop(entrada, dir); if (s != null) { stop = +s.toFixed(2); flags.stopAuto = true; } }
+      return { ...o, direcao: dir, entrada, alvo, stop, _preco: preco, _flags: flags };
+    });
+  };
   const scan = async () => {
     setScanning(true); setScanError(null); setScanResult(null);
     try {
       const today = new Date().toLocaleDateString("pt-BR");
-      const prompt = "Voce e analista tecnico B3 swing trade. Hoje: " + today + ". Use web_search: melhores oportunidades tecnicas de swing trade na B3 hoje, tanto de COMPRA quanto de VENDA (short). RESPONDA EM PORTUGUES. Inclua oportunidades nos DOIS sentidos quando houver. Em cada item, 'direcao' = 'COMPRA' ou 'VENDA'. Para COMPRA: alvo ACIMA da entrada e stop ABAIXO. Para VENDA: alvo ABAIXO da entrada e stop ACIMA. Retorne APENAS JSON valido sem texto extra: {\"data\":\"" + today + "\",\"contexto\":\"resumo do mercado\",\"oportunidades\":[{\"ticker\":\"PETR4\",\"nome\":\"Petrobras PN\",\"direcao\":\"COMPRA\",\"entrada\":38.50,\"alvo\":40.50,\"stop\":37.20,\"setup\":\"Rompimento\",\"racional\":\"Análise\",\"prazo\":\"2-3 dias\"},{\"ticker\":\"VALE3\",\"nome\":\"Vale ON\",\"direcao\":\"VENDA\",\"entrada\":60.00,\"alvo\":57.00,\"stop\":61.50,\"setup\":\"Perda de suporte\",\"racional\":\"Análise\",\"prazo\":\"2-4 dias\"}]}";
+      const prompt = "Voce e analista tecnico B3 swing trade. Hoje: " + today + ". Use web_search: melhores oportunidades tecnicas de swing trade na B3 hoje, tanto de COMPRA quanto de VENDA (short). RESPONDA EM PORTUGUES. Inclua oportunidades nos DOIS sentidos quando houver. Em cada item, 'direcao' = 'COMPRA' ou 'VENDA'. SEMPRE informe 'entrada', 'alvo' e 'stop' como NÚMEROS com base em níveis técnicos reais (suporte/resistência); se não houver níveis claros, use o preço atual como entrada. Para COMPRA: alvo ACIMA da entrada e stop ABAIXO. Para VENDA: alvo ABAIXO da entrada e stop ACIMA. Use tickers reais da B3 (ex.: PETR4, VALE3). Retorne APENAS JSON valido sem texto extra: {\"data\":\"" + today + "\",\"contexto\":\"resumo do mercado\",\"oportunidades\":[{\"ticker\":\"PETR4\",\"nome\":\"Petrobras PN\",\"direcao\":\"COMPRA\",\"entrada\":38.50,\"alvo\":40.50,\"stop\":37.20,\"setup\":\"Rompimento\",\"racional\":\"Análise\",\"prazo\":\"2-3 dias\"},{\"ticker\":\"VALE3\",\"nome\":\"Vale ON\",\"direcao\":\"VENDA\",\"entrada\":60.00,\"alvo\":57.00,\"stop\":61.50,\"setup\":\"Perda de suporte\",\"racional\":\"Análise\",\"prazo\":\"2-4 dias\"}]}";
       const parsed = await aiSearchJSON(prompt, ['"oportunidades"', '"oportunidade"', '"opportunities"']);
       const raw = parsed.oportunidades || parsed.oportunidade || parsed.opportunities || [];
       if (!raw.length) throw new Error("Nenhuma oportunidade encontrada. Tente novamente.");
-      // A IA às vezes devolve os preços como string ("38,50"/"38.50"); normaliza
-      // para número para os cálculos (.toFixed/R:R) e para o registro persistido.
-      const ops = raw.map(o => ({ ...o, entrada: numBR(o.entrada), alvo: numBR(o.alvo), stop: numBR(o.stop) }));
+      // A IA às vezes devolve os preços como string ("38,50"/"38.50") ou sem
+      // níveis; normaliza para número e deduz a direção quando ausente.
+      const norm = raw.map(o => {
+        const entrada = numBR(o.entrada), alvo = numBR(o.alvo), stop = numBR(o.stop);
+        const dir = o.direcao === "VENDA" ? "VENDA" : o.direcao === "COMPRA" ? "COMPRA" : (alvo != null && entrada != null && alvo < entrada ? "VENDA" : "COMPRA");
+        return { ...o, ticker: String(o.ticker || "").toUpperCase().trim(), direcao: dir, entrada, alvo, stop };
+      });
+      const ops = await enrichOpsComBrapi(norm);
       setScanResult({ data: parsed.data || today, contexto: parsed.contexto || "", oportunidades: ops });
     } catch (e) { setScanError(e.message); }
     setScanning(false);
@@ -1878,10 +1906,17 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                   const venda = tradeDir(op) === "VENDA";
                   const rr = op.entrada && op.stop ? Math.abs((op.alvo - op.entrada) / (op.entrada - op.stop)) : 0;
                   const pot = op.entrada ? tradePot(op).toFixed(1) : "0";
+                  const fl = op._flags || {};
+                  const completo = [op.entrada, op.alvo, op.stop].every(v => typeof v === "number" && isFinite(v));
+                  const tiles = [
+                    ["ENTRADA", op.entrada, T.text, fl.entradaAuto ? "a mercado" : null],
+                    ["ALVO +" + pot + "%", op.alvo, T.green, fl.alvoAuto ? DEF_ALVO_STOP_PCT + "%" : null],
+                    ["STOP", op.stop, T.red, fl.stopAuto ? DEF_ALVO_STOP_PCT + "%" : null],
+                  ];
                   return (
-                    <div key={i} style={{ background: T.inset, border: "1px solid " + T.line, borderRadius: 10, padding: "14px 16px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <div key={i} style={{ background: T.inset, border: "1px solid " + (fl.divergente ? T.gold + "66" : T.line), borderRadius: 10, padding: "14px 16px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                           <span style={{ fontSize: 18, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{op.ticker}</span>
                           <span style={{ fontSize: 13, color: T.mut }}>{op.nome}</span>
                           <Badge tone={venda ? "red" : "green"}>{venda ? "▼ VENDA" : "▲ COMPRA"}</Badge>
@@ -1892,18 +1927,29 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                           <span style={{ fontSize: 14, color: rrColor(rr), fontFamily: T.mono }}>R:R 1:{rr.toFixed(1)}</span>
                         </div>
                       </div>
+                      {/* Cotação real da brapi (referência para o analista) */}
+                      <div style={{ fontSize: 12, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: fl.semCotacao ? T.red : T.mut }}>
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: fl.semCotacao ? T.red : fl.statusPreco === "stale" ? T.dim : T.green, display: "inline-block" }} />
+                        {fl.semCotacao
+                          ? <span>Sem cotação na brapi para <b>{op.ticker}</b> — confira o ticker (pode não existir ou estar sem pregão).</span>
+                          : <span>Cotação brapi: <b style={{ color: T.text, fontFamily: T.mono }}>R$ {op._preco.toFixed(2)}</b>{fl.statusPreco === "stale" ? " (último valor)" : " (delay ~15 min)"}</span>}
+                      </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
-                        {[["ENTRADA", op.entrada ? op.entrada.toFixed(2) : "—", T.text], ["ALVO +" + pot + "%", op.alvo ? op.alvo.toFixed(2) : "—", T.green], ["STOP", op.stop ? op.stop.toFixed(2) : "—", T.red]].map(([l, v, c]) => (
+                        {tiles.map(([l, v, c, tag]) => (
                           <div key={l} style={{ background: T.panel2, borderRadius: 8, padding: "10px 14px", borderLeft: "3px solid " + c }}>
-                            <div style={{ fontSize: 11, color: T.dim, marginBottom: 5 }}>{l}</div>
-                            <div style={{ fontSize: 17, fontWeight: 700, color: c, fontFamily: T.mono }}>R$ {v}</div>
+                            <div style={{ fontSize: 11, color: T.dim, marginBottom: 5, display: "flex", justifyContent: "space-between", gap: 6 }}>
+                              <span>{l}</span>
+                              {tag && <span title="Preenchido automaticamente" style={{ color: T.gold, fontWeight: 700 }}>auto · {tag}</span>}
+                            </div>
+                            <div style={{ fontSize: 17, fontWeight: 700, color: c, fontFamily: T.mono }}>R$ {typeof v === "number" && isFinite(v) ? v.toFixed(2) : "—"}</div>
                           </div>
                         ))}
                       </div>
+                      {fl.divergente && <div style={{ fontSize: 12.5, color: T.gold, marginBottom: 10, lineHeight: 1.5 }}>⚠️ A entrada sugerida pela IA (R$ {op.entrada.toFixed(2)}) está &gt;15% do preço de mercado (R$ {op._preco.toFixed(2)}) — pode ser um dado desatualizado. Revise antes de publicar.</div>}
                       {(op.setup || op.racional) && <div style={{ fontSize: 13, color: T.mut, marginBottom: 12, lineHeight: 1.6 }}><span style={{ color: T.gold }}>📊 {op.setup}</span> — {op.racional}</div>}
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <Button variant="success" size="sm" onClick={() => addFromScan(op)}>✓ Publicar recomendação</Button>
-                        <span style={{ fontSize: 12, color: T.dim }}>Analise como CNPI antes de recomendar</span>
+                        <Button variant="success" size="sm" onClick={() => addFromScan(op)} disabled={!completo}>✓ Publicar recomendação</Button>
+                        <span style={{ fontSize: 12, color: completo ? T.dim : T.red }}>{completo ? "Analise como CNPI antes de recomendar" : "Faltam níveis (entrada/alvo/stop) e não há cotação para completar — edite manualmente."}</span>
                       </div>
                     </div>
                   );
