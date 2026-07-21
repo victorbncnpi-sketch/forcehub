@@ -57,26 +57,54 @@ async function processItem(it, q, redis, { now, today, kind }) {
   const pubDate = brt(pubTsOf(it));
   const qFresh = q && q.price != null && brt(q.time || now) === today;
 
-  // ── Gatilho de entrada ──
+  // ── Gatilho de entrada (e invalidação por preço) ──
+  // A entrada fica ENTRE o stop e o alvo. Se, aguardando, o preço tocar o alvo
+  // ou o stop SEM acionar a entrada, o movimento passou ao largo do gatilho: a
+  // call morreu (alvo = já foi sem nós; stop = premissa quebrada) e vira EXPIRADA
+  // com o motivo. O toque da entrada tem prioridade sobre a invalidação (se a
+  // barra/amostra acionou a entrada, a operação nasce posicionada).
   if (g.status === "AGUARDANDO") {
-    let trig = null;
+    let trig = null, invalid = null; // invalid: { tipo:"alvo"|"stop", ts }
+    const invalidaDe = (aHit, sHit, ts) => ({ tipo: (aHit && sHit) ? "stop" : (aHit ? "alvo" : "stop"), ts });
     if (today > pubDate) {
       const bars = await getDailyBars(it.ticker, redis);
       for (const b of bars) {
         if (b.date <= pubDate || b.date >= today) continue;
-        if (b.low <= e && e <= b.high) { trig = { ts: Date.parse(b.date + "T15:00:00Z") }; break; }
+        const ts = Date.parse(b.date + "T15:00:00Z");
+        if (b.low <= e && e <= b.high) { trig = { ts }; break; }         // entrada acionada
+        const aHit = isBuy ? b.high >= alvo : b.low <= alvo;
+        const sHit = isBuy ? b.low <= stop : b.high >= stop;
+        if (aHit || sHit) { invalid = invalidaDe(aHit, sHit, ts); break; } // passou sem acionar
       }
-      if (!trig && qFresh && q.dayLow != null && q.dayHigh != null && q.dayLow <= e && e <= q.dayHigh) {
-        trig = { ts: q.time || now };
+      if (!trig && !invalid && qFresh && q.dayLow != null && q.dayHigh != null) {
+        if (q.dayLow <= e && e <= q.dayHigh) trig = { ts: q.time || now };
+        else {
+          const aHit = isBuy ? q.dayHigh >= alvo : q.dayLow <= alvo;
+          const sHit = isBuy ? q.dayLow <= stop : q.dayHigh >= stop;
+          if (aHit || sHit) invalid = invalidaDe(aHit, sHit, q.time || now);
+        }
       }
     } else if (qFresh && (q.time || 0) >= pubTsOf(it)) {
-      // Dia da publicação: cruzamento entre amostras (ou toque exato).
+      // Dia da publicação: cruzamento entre amostras (ou toque exato). A máx/mín
+      // do dia contém momentos ANTES da publicação, então aqui só a amostra ao
+      // vivo decide — inclusive para invalidar (preço já além do alvo/stop).
       const last = g.lastPrice;
       if (q.price === e || (last != null && (last - e) * (q.price - e) <= 0)) trig = { ts: q.time || now };
+      else {
+        const aHit = isBuy ? q.price >= alvo : q.price <= alvo;
+        const sHit = isBuy ? q.price <= stop : q.price >= stop;
+        if (aHit || sHit) invalid = invalidaDe(aHit, sHit, q.time || now);
+      }
       if (g.lastPrice !== q.price) { g.lastPrice = q.price; changed = true; }
     }
     if (trig) {
       g.status = "POSICIONADA"; g.triggeredAt = trig.ts; delete g.lastPrice;
+      changed = true;
+    } else if (invalid) {
+      g.status = "EXPIRADA"; delete g.lastPrice;
+      it.status = "EXPIRADA";
+      it.expirouEm = new Date(invalid.ts).toLocaleDateString("pt-BR");
+      it.invalidadaPor = invalid.tipo; // "alvo" (moveu sem acionar) | "stop" (premissa quebrada)
       changed = true;
     }
   }

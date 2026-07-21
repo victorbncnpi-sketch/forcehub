@@ -1102,7 +1102,7 @@ function PosicaoRow({ p, cot, onFechar, onRemove }) {
       <div style={{ fontSize: 15, fontWeight: 700, color: pctColor }}>{pctVal == null ? "—" : (pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%"}</div>
       <div>
         {expirada ? (
-          <Badge tone="mut">✖ não acionada{p.expirouEm ? " · " + p.expirouEm : ""}</Badge>
+          <Badge tone="mut" title={p.invalidadaPor === "alvo" ? "Preço atingiu o alvo sem acionar a entrada — o movimento aconteceu sem você" : p.invalidadaPor === "stop" ? "Preço atingiu o stop sem acionar a entrada — premissa da operação quebrada" : "Não acionada dentro do prazo de validade"}>✖ {p.invalidadaPor === "alvo" ? "alvo sem acionar" : p.invalidadaPor === "stop" ? "stop sem acionar" : "não acionada"}{p.expirouEm ? " · " + p.expirouEm : ""}</Badge>
         ) : aguardando ? (
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <Badge tone="gold">⏳ aguardando R$ {Number(p.entrada).toFixed(2)}</Badge>
