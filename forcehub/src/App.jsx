@@ -1483,7 +1483,7 @@ function MinhaCarteira() {
 
       {(marcaveis > 0 || temOpcaoAberta) && (
         <div style={{ fontSize: 12, color: T.mut, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> ⏱ Ações com <b style={{ color: T.text }}>delay ~15 min</b>{cotAt ? " · atualizado " + fmtTime(cotAt) : ""} · opções por <b style={{ color: T.text }}>fechamento (EOD)</b>.
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.green, display: "inline-block" }} /> ⏱ Ações com <b style={{ color: T.text }}>delay ~15 min</b>{cotAt ? " · atualizado " + fmtTime(cotAt) : ""} · opções por <b style={{ color: T.text }}>fechamento (EOD)</b> · posições com alvo/stop <b style={{ color: T.text }}>encerram sozinhas no nível</b>.
         </div>
       )}
 
@@ -1546,8 +1546,8 @@ function MinhaCarteira() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Field label="Alvo (opcional)" hint="Alerta quando o preço alcançar"><Input mono type="number" step="0.01" value={form.alvo} onChange={e => setF("alvo", e.target.value)} placeholder="—" style={{ color: T.green }} /></Field>
-              <Field label="Stop (opcional)" hint="Alerta de proteção"><Input mono type="number" step="0.01" value={form.stop} onChange={e => setF("stop", e.target.value)} placeholder="—" style={{ color: T.red }} /></Field>
+              <Field label="Alvo (opcional)" hint="Encerra sozinho ao alcançar"><Input mono type="number" step="0.01" value={form.alvo} onChange={e => setF("alvo", e.target.value)} placeholder="—" style={{ color: T.green }} /></Field>
+              <Field label="Stop (opcional)" hint="Encerra sozinho ao proteger"><Input mono type="number" step="0.01" value={form.stop} onChange={e => setF("stop", e.target.value)} placeholder="—" style={{ color: T.red }} /></Field>
             </div>
 
             <Field label="Observações (opcional)"><Input value={form.obs} onChange={e => setF("obs", e.target.value)} placeholder="Tese, motivo da entrada..." /></Field>
@@ -1610,7 +1610,7 @@ function CarteiraRow({ p, cot, onFechar, onRemove }) {
           </div>
         ) : (
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <Badge tone="mut">✓ {p.dataSaida}</Badge>
+            <Badge tone="mut" title={p.fechadoAuto ? ("Encerrada automaticamente no " + (p.motivoFechamento === "alvo" ? "alvo" : "stop") + (p.fechamentoAmbiguo ? " (alvo e stop no mesmo dia — assumido stop)" : "")) : undefined}>{p.fechadoAuto ? (p.motivoFechamento === "alvo" ? "🎯 " : "🛑 ") : "✓ "}{p.dataSaida}</Badge>
             <button className="fh-btn" onClick={() => onRemove(p.id)} title="Remover" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>
           </div>
         )}

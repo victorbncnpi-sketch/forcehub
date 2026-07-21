@@ -9,5 +9,9 @@
     { "source": "/api/tickers", "destination": "/api/market?kind=tickers" },
     { "source": "/api/cohort", "destination": "/api/users?fn=cohort" },
     { "source": "/api/seed-demo", "destination": "/api/users?fn=seeddemo" }
+  ],
+  "crons": [
+    { "path": "/api/posicoes?cron=1", "schedule": "30 16 * * 1-5" },
+    { "path": "/api/posicoes?cron=1", "schedule": "30 22 * * 1-5" }
   ]
 }

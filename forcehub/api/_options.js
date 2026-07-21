@@ -15,6 +15,7 @@
 // ativos; o sandbox só PETR4).
 import { getJson, findBarsArray, toISODate } from "./_market-data";
 import { getSession, sessionCan } from "./_auth";
+import { getQuotes, getDailyBars, sanitizeTicker } from "./_brapi";
 
 const BRAPI_TOKEN = process.env.BRAPI_TOKEN || "";
 const OPT = "https://brapi.dev/api/v2/options";
@@ -176,6 +177,110 @@ export async function runOptionMarks({ redis, items, scope }) {
       } catch (_) {}
     }
   }
+  return changed;
+}
+
+// ─── Encerramento automático da carteira própria (alvo/stop) ─────────────────
+// Fecha as posições ABERTAS que tocaram alvo/stop, do MESMO jeito das
+// recomendações: ações via barras diárias desde a abertura + cotação do dia
+// (delay ~15 min); opções via preço EOD (precoAtual, marcado por runOptionMarks).
+// Sempre fecha NO NÍVEL, direção-aware, e marca fechadoAuto/motivoFechamento.
+// Trava por escopo (~10 min). Muta os itens; retorna true se algo mudou.
+const OWN_THROTTLE_MS = 9.5 * 60 * 1000;
+const ownIsLong = (p) => p.direcao !== "VENDA"; // COMPRA/long (+) vs VENDA/short (−)
+const hasLvl = (v) => v != null && v !== "" && !Number.isNaN(Number(v));
+const parseBRdate = (s) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(s || "")); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
+const brtOf = (ms) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+
+function ownClose(p, tipo, level, ts) {
+  const dir = ownIsLong(p) ? 1 : -1;
+  p.status = "FECHADA";
+  p.precoSaida = +Number(level).toFixed(p.kind === "opcao" ? 3 : 2);
+  p.resultado = p.precoMedio ? +(dir * ((p.precoSaida - p.precoMedio) / p.precoMedio) * 100).toFixed(2) : null;
+  p.dataSaida = new Date(ts).toLocaleDateString("pt-BR");
+  p.fechadoAuto = true;
+  p.motivoFechamento = tipo;
+}
+
+export async function runOwnAutoClose({ redis, items, scope }) {
+  if (!Array.isArray(items) || !items.length) return false;
+  const open = items.filter(p => p && p.status === "ABERTA" && (hasLvl(p.alvo) || hasLvl(p.stop)));
+  if (!open.length) return false;
+
+  if (redis) {
+    const tkey = "forcehub:ownclose:" + scope;
+    try {
+      const last = await redis.get(tkey);
+      if (last && Date.now() - Number(last) < OWN_THROTTLE_MS) return false;
+      await redis.set(tkey, Date.now(), { ex: 3600 });
+    } catch (_) {}
+  }
+
+  const now = Date.now();
+  const today = todayBRT();
+  let changed = false;
+
+  // Opções: preço EOD já marcado (precoAtual). Cruzou o nível -> fecha no nível.
+  for (const p of open.filter(x => x.kind === "opcao")) {
+    const price = num(p.precoAtual);
+    if (price == null) continue;
+    const long = ownIsLong(p);
+    const a = hasLvl(p.alvo) && (long ? price >= Number(p.alvo) : price <= Number(p.alvo));
+    const s = hasLvl(p.stop) && (long ? price <= Number(p.stop) : price >= Number(p.stop));
+    if (a || s) {
+      const tipo = a ? "alvo" : "stop";
+      ownClose(p, tipo, tipo === "alvo" ? p.alvo : p.stop, now);
+      if (a && s) p.fechamentoAmbiguo = true;
+      changed = true;
+    }
+  }
+
+  // Ações: barras diárias desde a abertura + cotação do dia (delay ~15 min).
+  const acoes = open.filter(x => x.kind !== "opcao" && x.ticker && x.status === "ABERTA");
+  if (acoes.length) {
+    let quotes = {};
+    try { quotes = await getQuotes(acoes.map(x => x.ticker), redis); } catch (_) {}
+    for (const p of acoes) {
+      try {
+        if (p.status !== "ABERTA") continue;
+        const long = ownIsLong(p);
+        const alvo = Number(p.alvo), stop = Number(p.stop);
+        const hA = hasLvl(p.alvo), hS = hasLvl(p.stop);
+        const openDate = parseBRdate(p.abertoEm) || today;
+        const q = quotes[sanitizeTicker(p.ticker)];
+        const fresh = q && q.price != null && brtOf(q.time || now) === today;
+        let hit = null;
+        if (today > openDate) {
+          // Dias após a abertura: máx/mín da barra tocou o nível.
+          const bars = await getDailyBars(p.ticker, redis);
+          for (const b of bars) {
+            if (b.date <= openDate || b.date >= today) continue;
+            const a = hA && (long ? b.high >= alvo : b.low <= alvo);
+            const s = hS && (long ? b.low <= stop : b.high >= stop);
+            if (!a && !s) continue;
+            const ts = Date.parse(b.date + "T18:00:00Z");
+            hit = (a && s) ? { tipo: "stop", level: stop, ts, ambiguo: true } : (a ? { tipo: "alvo", level: alvo, ts } : { tipo: "stop", level: stop, ts });
+            break;
+          }
+          // Hoje (após o dia da abertura): dia inteiro é válido -> máx/mín do dia.
+          if (!hit && fresh && q.dayHigh != null && q.dayLow != null) {
+            const a = hA && (long ? q.dayHigh >= alvo : q.dayLow <= alvo);
+            const s = hS && (long ? q.dayLow <= stop : q.dayHigh >= stop);
+            if (a || s) hit = (a && s) ? { tipo: "stop", level: stop, ts: q.time || now, ambiguo: true } : (a ? { tipo: "alvo", level: alvo, ts: q.time || now } : { tipo: "stop", level: stop, ts: q.time || now });
+          }
+        } else if (fresh) {
+          // Mesmo dia da abertura: só o preço amostrado (sem máx/mín, que
+          // conteria momentos anteriores à montagem da posição).
+          const a = hA && (long ? q.price >= alvo : q.price <= alvo);
+          const s = hS && (long ? q.price <= stop : q.price >= stop);
+          if (a) hit = { tipo: "alvo", level: alvo, ts: q.time || now };
+          else if (s) hit = { tipo: "stop", level: stop, ts: q.time || now };
+        }
+        if (hit) { ownClose(p, hit.tipo, hit.level, hit.ts); if (hit.ambiguo) p.fechamentoAmbiguo = true; changed = true; }
+      } catch (_) {}
+    }
+  }
+
   return changed;
 }
 

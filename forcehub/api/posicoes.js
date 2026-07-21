@@ -15,7 +15,8 @@
 import { getRedis } from "./_redis";
 import { getSession, sessionCan } from "./_auth";
 import { runGatilho } from "./_gatilho";
-import { runOptionMarks } from "./_options";
+import { runOptionMarks, runOwnAutoClose } from "./_options";
+import { cronSweep } from "./_cron";
 
 const keyRec = (u) => "forcehub:positions:" + u;
 const keyOwn = (u) => "forcehub:portfolio:" + u;
@@ -23,6 +24,19 @@ const keyOwn = (u) => "forcehub:portfolio:" + u;
 export default async function handler(req, res) {
   const redis = getRedis();
   if (!redis) return res.status(503).json({ ok: false, error: "Banco não configurado (defina UPSTASH_REDIS_REST_URL/TOKEN)." });
+
+  // ── Cron (Vercel): varre recomendações + posições + carteiras próprias de
+  // TODOS os usuários, encerrando o que tocou alvo/stop — sem depender de
+  // ninguém abrir a tela. Autentica pelo CRON_SECRET (header Bearer que a Vercel
+  // injeta automaticamente, ou ?cron=<segredo> para disparo manual).
+  if (req.query.cron != null) {
+    const secret = process.env.CRON_SECRET || "";
+    const auth = (req.headers.authorization || "").trim();
+    const ok = !!secret && (auth === "Bearer " + secret || String(req.query.cron) === secret);
+    if (!ok) return res.status(401).json({ ok: false, error: "Não autorizado (defina CRON_SECRET)." });
+    try { const swept = await cronSweep(redis); return res.status(200).json({ ok: true, swept }); }
+    catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  }
 
   const own = req.query.scope === "own";
   const cap = own ? "portfolio" : "carteira";
@@ -41,9 +55,12 @@ export default async function handler(req, res) {
       const data = await redis.get(keyFor(user));
       const posicoes = Array.isArray(data) ? data : (Array.isArray(data && data.posicoes) ? data.posicoes : []);
       if (own) {
-        // Carteira própria: marca as OPÇÕES a mercado (EOD, trava de ~30min).
-        try { if (await runOptionMarks({ redis, items: posicoes, scope: "own:" + user })) await redis.set(keyFor(user), posicoes); }
-        catch (e) { /* best-effort */ }
+        // Carteira própria: marca as OPÇÕES a mercado (EOD, ~30min) e encerra
+        // automaticamente quem tocou alvo/stop (ações + opções, ~10min).
+        let ch = false;
+        try { if (await runOptionMarks({ redis, items: posicoes, scope: "own:" + user })) ch = true; } catch (e) { /* best-effort */ }
+        try { if (await runOwnAutoClose({ redis, items: posicoes, scope: "own:" + user })) ch = true; } catch (e) { /* best-effort */ }
+        if (ch) await redis.set(keyFor(user), posicoes);
       } else {
         // Gatilho/expiração/fechamento automático, por usuário (trava de ~10min).
         try { if (await runGatilho({ redis, items: posicoes, scope: "pos:" + user, kind: "pos" })) await redis.set(keyFor(user), posicoes); }
