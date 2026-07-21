@@ -1633,6 +1633,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
   const [scanError, setScanError] = useState(null);
   const FORM_VAZIO = { ticker: "", tickerOk: false, nome: "", direcao: "COMPRA", entrada: "", alvo: "", stop: "", qty: "", obs: "", imagem: "", tipoEntrada: "gatilho", validade: "3" };
   const [form, setForm] = useState(FORM_VAZIO);
+  const [formErro, setFormErro] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [lightbox, setLightbox] = useState(null);
@@ -1719,9 +1720,17 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     if (!ev || !av || !sv || isNaN(ev) || isNaN(av) || isNaN(sv)) return null;
     return Math.abs((av - ev) / (ev - sv));
   };
+  // Já existe uma recomendação EM ANDAMENTO (aguardando gatilho ou posicionada)
+  // para este ticker? Bloqueia duplicar a call no mesmo ativo — encerradas e
+  // não acionadas (EXPIRADA) não contam, pois já saíram do radar.
+  const tickerEmAndamento = (tk) => {
+    const t = String(tk || "").toUpperCase();
+    return acoes.some(a => a.ticker === t && a.status !== "ENCERRADA" && a.status !== "EXPIRADA");
+  };
   const addAcao = async () => {
     const e = parseFloat(form.entrada), a = parseFloat(form.alvo), s = parseFloat(form.stop);
     if (!form.ticker || !form.tickerOk || !e || !a || !s) return; // ticker precisa vir da lista da brapi
+    if (tickerEmAndamento(form.ticker)) { setFormErro("Já existe uma recomendação em andamento para " + form.ticker.toUpperCase() + ". Encerre-a antes de criar outra."); return; }
     const id = idRef.current++;
     const agora = Date.now();
     const nova = {
@@ -1735,7 +1744,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     if (form.imagem) { try { await api.post("/api/carteira?img=" + id, { data: form.imagem }); } catch (err) { nova.hasImage = false; setLoadError("Falha ao salvar a imagem: " + err.message); } }
     const next = [...acoes, nova];
     setAcoes(next); saveRecs(next);
-    setForm(FORM_VAZIO);
+    setForm(FORM_VAZIO); setFormErro("");
     setShowForm(false);
   };
   const removeAcao = (id) => {
@@ -1749,6 +1758,10 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     // alvo/stop nulos, que quebravam a renderização da carteira).
     if (![op.entrada, op.alvo, op.stop].every(v => typeof v === "number" && isFinite(v))) {
       setScanError("Esta oportunidade veio sem preços válidos (entrada/alvo/stop). Edite-a manualmente ou busque novamente.");
+      return;
+    }
+    if (tickerEmAndamento(op.ticker)) {
+      setScanError("Já existe uma recomendação em andamento para " + String(op.ticker).toUpperCase() + ". Encerre-a antes de publicar outra.");
       return;
     }
     const nova = {
@@ -1878,7 +1891,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
         {canWrite && aba !== "propria" && (
           <div style={{ display: "flex", gap: 10 }}>
             <Button variant="success" size="sm" onClick={scan} disabled={scanning}>{scanning ? "⟳ Buscando..." : <><Icon name="search" size={14} /> Buscar com IA</>}</Button>
-            <Button size="sm" onClick={() => setShowForm(true)}>+ Nova recomendação</Button>
+            <Button size="sm" onClick={() => { setFormErro(""); setShowForm(true); }}>+ Nova recomendação</Button>
           </div>
         )}
       </div>
@@ -1908,6 +1921,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                   const pot = op.entrada ? tradePot(op).toFixed(1) : "0";
                   const fl = op._flags || {};
                   const completo = [op.entrada, op.alvo, op.stop].every(v => typeof v === "number" && isFinite(v));
+                  const emAndamento = tickerEmAndamento(op.ticker);
                   const tiles = [
                     ["ENTRADA", op.entrada, T.text, fl.entradaAuto ? "a mercado" : null],
                     ["ALVO +" + pot + "%", op.alvo, T.green, fl.alvoAuto ? DEF_ALVO_STOP_PCT + "%" : null],
@@ -1948,8 +1962,8 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                       {fl.divergente && <div style={{ fontSize: 12.5, color: T.gold, marginBottom: 10, lineHeight: 1.5 }}>⚠️ A entrada sugerida pela IA (R$ {op.entrada.toFixed(2)}) está &gt;15% do preço de mercado (R$ {op._preco.toFixed(2)}) — pode ser um dado desatualizado. Revise antes de publicar.</div>}
                       {(op.setup || op.racional) && <div style={{ fontSize: 13, color: T.mut, marginBottom: 12, lineHeight: 1.6 }}><span style={{ color: T.gold }}>📊 {op.setup}</span> — {op.racional}</div>}
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <Button variant="success" size="sm" onClick={() => addFromScan(op)} disabled={!completo}>✓ Publicar recomendação</Button>
-                        <span style={{ fontSize: 12, color: completo ? T.dim : T.red }}>{completo ? "Analise como CNPI antes de recomendar" : "Faltam níveis (entrada/alvo/stop) e não há cotação para completar — edite manualmente."}</span>
+                        <Button variant="success" size="sm" onClick={() => addFromScan(op)} disabled={!completo || emAndamento}>✓ Publicar recomendação</Button>
+                        <span style={{ fontSize: 12, color: (completo && !emAndamento) ? T.dim : T.red }}>{emAndamento ? "⛔ Já existe recomendação em andamento para " + op.ticker + " — encerre-a antes." : completo ? "Analise como CNPI antes de recomendar" : "Faltam níveis (entrada/alvo/stop) e não há cotação para completar — edite manualmente."}</span>
                       </div>
                     </div>
                   );
@@ -1961,7 +1975,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
             <EmptyState icon={<Icon name="carteira" size={40} color={T.dim} />} title="Nenhuma recomendação ativa" desc={canWrite ? "Crie uma recomendação manualmente ou busque oportunidades com IA." : "O administrador ainda não publicou recomendações."}>
               {canWrite && <>
                 <Button variant="success" onClick={scan}><Icon name="search" size={14} /> Buscar com IA</Button>
-                <Button onClick={() => setShowForm(true)}>+ Adicionar manualmente</Button>
+                <Button onClick={() => { setFormErro(""); setShowForm(true); }}>+ Adicionar manualmente</Button>
               </>}
             </EmptyState>
           )}
@@ -2128,8 +2142,8 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
               <Field label="Ticker" hint={form.ticker ? (form.tickerOk ? "✓ Ativo válido da B3" : "Selecione o ativo na lista") : "Digite 2+ letras e escolha na lista"}>
                 <TickerSelect value={form.ticker} ok={form.tickerOk}
-                  onText={(v) => setForm(p => ({ ...p, ticker: v, tickerOk: false }))}
-                  onPick={(s) => setForm(p => ({ ...p, ticker: s.ticker, tickerOk: true, nome: p.nome || s.nome }))} />
+                  onText={(v) => { setFormErro(""); setForm(p => ({ ...p, ticker: v, tickerOk: false })); }}
+                  onPick={(s) => { setFormErro(""); setForm(p => ({ ...p, ticker: s.ticker, tickerOk: true, nome: p.nome || s.nome })); }} />
               </Field>
               <Field label="Empresa"><Input value={form.nome} onChange={e => setF("nome", e.target.value)} placeholder="Petrobras PN" /></Field>
             </div>
@@ -2187,9 +2201,12 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                 <div><div style={{ fontSize: 12, color: T.dim, marginBottom: 4 }}>Risco</div><div style={{ fontSize: 19, color: T.red, fontFamily: T.mono }}>{tradeRisco(form).toFixed(1)}%</div></div>
               </div>
             )}
+            {(formErro || (form.tickerOk && tickerEmAndamento(form.ticker))) && (
+              <Banner tone="red">{formErro || ("⛔ Já existe uma recomendação em andamento para " + form.ticker.toUpperCase() + ". Encerre-a antes de criar outra neste ativo.")}</Banner>
+            )}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <Button variant="ghost" onClick={() => setShowForm(false)}>Cancelar</Button>
-              <Button onClick={addAcao} disabled={!form.tickerOk}>Adicionar →</Button>
+              <Button onClick={addAcao} disabled={!form.tickerOk || tickerEmAndamento(form.ticker)}>Adicionar →</Button>
             </div>
           </div>
         </Modal>
