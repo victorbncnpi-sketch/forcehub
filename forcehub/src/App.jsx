@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Dots, Spinner, Loading, Icon } from "./ui";
+import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Dots, Spinner, Loading, Icon, confirmDialog, ConfirmHost } from "./ui";
 
 // ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
 // Papéis: superadmin (irrestrito e imutável) · moderator (tudo, exceto alterar o super admin) · client.
@@ -1445,10 +1445,10 @@ function MinhaCarteira() {
     setPosicoes(list); salvar(list);
     setForm(CARTEIRA_FORM_VAZIO); setShowForm(false);
   };
-  const remover = (id) => {
+  const remover = async (id) => {
     const p = posicoes.find(x => x.id === id);
     const rot = p ? (p.kind === "opcao" ? p.symbol : p.ticker) : "esta posição";
-    if (!window.confirm(`Remover ${rot} da sua carteira?\n\nA posição e o resultado dela saem da carteira. Não dá para desfazer.`)) return;
+    if (!(await confirmDialog({ title: `Remover ${rot} da sua carteira?`, message: "A posição e o resultado dela saem da carteira. Não dá para desfazer.", confirmLabel: "Remover", tone: "danger" }))) return;
     const list = posicoes.filter(p => p.id !== id); setPosicoes(list); salvar(list);
   };
   const fechar = (id, precoSaida) => {
@@ -1769,10 +1769,10 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     setAcoes(next); saveRecs(next);
     if (alvo && alvo.hasImage) { api.post("/api/carteira?img=" + id, { data: null }).catch(() => {}); }
   };
-  const removeAcao = (id) => {
+  const removeAcao = async (id) => {
     const a = acoes.find(x => x.id === id);
     const rot = a ? a.ticker : "esta recomendação";
-    if (!window.confirm(`Excluir a recomendação de ${rot}?\n\nEla sai da carteira para todos os clientes. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.`)) return;
+    if (!(await confirmDialog({ title: `Excluir a recomendação de ${rot}?`, message: "Ela sai da carteira para todos os clientes. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.", tone: "danger" }))) return;
     doRemoveAcao(id);
   };
   const addFromScan = (op) => {
@@ -1808,10 +1808,10 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     setPosicoes(nextPos); savePos(nextPos);
     setAba("posicoes");
   };
-  const removerPosicao = (posId) => {
+  const removerPosicao = async (posId) => {
     const p = posicoes.find(x => x.posId === posId);
     const rot = p ? p.ticker : "esta operação";
-    if (!window.confirm(`Descartar ${rot}?\n\nA operação sai da sua carteira e não será mais acompanhada. Não dá para desfazer.`)) return;
+    if (!(await confirmDialog({ title: `Descartar ${rot}?`, message: "A operação sai da sua carteira e não será mais acompanhada. Não dá para desfazer.", confirmLabel: "Descartar", tone: "danger" }))) return;
     const nextPos = posicoes.filter(p => p.posId !== posId);
     setPosicoes(nextPos); savePos(nextPos);
   };
@@ -1822,7 +1822,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
   const excluirPosicao = async (posId) => {
     const alvo = posicoes.find(p => p.posId === posId);
     const rot = alvo ? (alvo.ticker || "esta posição") : "esta posição";
-    if (!window.confirm(`Excluir ${rot} da carteira?\n\nA operação será removida por completo e não contará como realizada (nem no desempenho, nem no Diário/Dashboard). Não dá para desfazer.`)) return;
+    if (!(await confirmDialog({ title: `Excluir ${rot} da carteira?`, message: "A operação será removida por completo e não contará como realizada (nem no desempenho, nem no Diário/Dashboard). Não dá para desfazer.", tone: "danger" }))) return;
     const nextPos = posicoes.filter(p => p.posId !== posId);
     setPosicoes(nextPos); savePos(nextPos);
     // Limpa a linha espelhada no Diário (conta real), se houver.
@@ -1838,10 +1838,10 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
   // Exclusão de recomendação pelo staff, em qualquer status (inclusive já
   // encerrada): remove do histórico/desempenho. Não mexe nas posições que alunos
   // eventualmente aceitaram (cada um gere a sua). removeAcao cuida da imagem.
-  const excluirRec = (id) => {
+  const excluirRec = async (id) => {
     const a = acoes.find(x => x.id === id);
     const rot = a ? a.ticker : "esta recomendação";
-    if (!window.confirm(`Excluir ${rot} do histórico de recomendações?\n\nSai do desempenho/track record e não conta como call realizada. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.`)) return;
+    if (!(await confirmDialog({ title: `Excluir ${rot} do histórico de recomendações?`, message: "Sai do desempenho/track record e não conta como call realizada. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.", tone: "danger" }))) return;
     doRemoveAcao(id);
   };
   // Admin encerra a call -> resultado oficial (entra no track record compartilhado).
@@ -2552,7 +2552,7 @@ function ClientesScreen({ session }) {
   };
   const deleteDemo = async () => {
     if (seeding) return;
-    if (!window.confirm("Apagar TODOS os alunos e dados de teste (contas demo)? Os usuários reais não são afetados.")) return;
+    if (!(await confirmDialog({ title: "Apagar dados de teste?", message: "Apaga TODOS os alunos e dados de teste (contas demo). Os usuários reais não são afetados.", confirmLabel: "Apagar demo", tone: "danger" }))) return;
     setSeeding(true); setDemoMsg(null);
     try {
       const j = await api.post("/api/seed-demo", { action: "delete" });
@@ -2598,7 +2598,7 @@ function ClientesScreen({ session }) {
   };
 
   const remove = async (u) => {
-    if (!window.confirm(`Remover o acesso de "${u.name || u.user}" (${u.user})? Esta ação não pode ser desfeita.`)) return;
+    if (!(await confirmDialog({ title: `Remover o acesso de ${u.name || u.user}?`, message: `Usuário ${u.user}. Esta ação não pode ser desfeita.`, confirmLabel: "Remover", tone: "danger" }))) return;
     try { await api.post("/api/users", { action: "delete", user: u.user }); await load(); }
     catch (e) { setError(e.message); }
   };
@@ -2787,7 +2787,7 @@ function InteressadosScreen({ session }) {
     finally { setSaving(false); }
   };
   const descartar = async (lead) => {
-    if (!window.confirm(`Descartar o interesse de "${lead.nome}"? Esta ação não pode ser desfeita.`)) return;
+    if (!(await confirmDialog({ title: `Descartar o interesse de ${lead.nome}?`, message: "Esta ação não pode ser desfeita.", confirmLabel: "Descartar", tone: "danger" }))) return;
     try { await api.post("/api/leads", { action: "delete", id: lead.id }); await load(); }
     catch (e) { setError(e.message); }
   };
@@ -3427,10 +3427,10 @@ function TradesScreen({ session, account = "real", setAccount }) {
     catch (e) { setErr("Falha ao excluir: " + e.message); }
   };
   // Confirmação antes de remover, seja manual ou registro do Conselheiro.
-  const askRemove = (e) => {
+  const askRemove = async (e) => {
     const desc = [e.ativo, e.fin != null ? fmtBRL(e.fin) : (e.r != null ? fmtR(e.r) : null), e.t ? dmy(e.t) : null].filter(Boolean).join(" · ");
     const extra = e.fonte === "conselheiro" ? "\n\nEsta operação foi registrada pelo Conselheiro; a anotação associada também será removida." : "";
-    if (!window.confirm(`Excluir esta operação?\n\n${desc || "(sem detalhes)"}${extra}`)) return;
+    if (!(await confirmDialog({ title: "Excluir esta operação?", message: `${desc || "(sem detalhes)"}${extra}`, tone: "danger" }))) return;
     if (e.fonte === "manual") removeTrade(e.srcId);
     else if (e.fonte === "conselheiro") removeConselheiro(e.srcIdx);
   };
@@ -4104,6 +4104,7 @@ export default function App() {
   return (
     <>
       <GlobalStyle />
+      <ConfirmHost />
       <Shell session={session} active={current} onNavigate={setActive} onLogout={logout} onUpdateSession={setSession}>
         {current === "panorama" && <PanoramaScreen session={session} />}
         {current === "carteira" && <CarteiraScreen session={session} canWrite={can(session, "carteira_write")} canPortfolio={can(session, "portfolio")} />}

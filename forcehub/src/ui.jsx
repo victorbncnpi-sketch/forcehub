@@ -1,7 +1,7 @@
 // src/ui.jsx — Design system do FORCE HUB AI
 // Tokens de tema + componentes reutilizáveis. Mantém a identidade preto/dourado,
 // mas com layout mais limpo: sans-serif para textos, monospace só para números.
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export const T = {
   bg: "#0a0a0b",
@@ -210,6 +210,66 @@ export function Modal({ title, onClose, children, width = 560 }) {
           <button className="fh-btn" onClick={onClose} style={{ background: "transparent", color: T.mut, border: "none", fontSize: 22, width: 32, height: 32 }}>×</button>
         </div>
         <div style={{ padding: 20 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Confirmação (substitui window.confirm por um modal do próprio tema) ──────
+// Popups nativos do navegador (confirm/alert/prompt) travam a thread, não dão
+// para estilizar, podem ser bloqueados e quebram em alguns webviews/mobile.
+// Aqui um diálogo do design system com API imperativa baseada em Promise:
+//
+//   if (!(await confirmDialog({ title, message, confirmLabel, tone: "danger" }))) return;
+//
+// Um único <ConfirmHost /> montado na árvore escuta os pedidos e renderiza. Se
+// por algum motivo não houver host montado, cai no window.confirm nativo (rede
+// de segurança — nunca deixa uma ação destrutiva passar sem confirmação).
+let _confirmListener = null;
+export function confirmDialog(opts = {}) {
+  const o = typeof opts === "string" ? { message: opts } : (opts || {});
+  return new Promise((resolve) => {
+    if (typeof _confirmListener !== "function") {
+      const txt = [o.title, o.message].filter(Boolean).join("\n\n");
+      resolve(window.confirm(txt || "Confirmar?"));
+      return;
+    }
+    _confirmListener({ ...o, resolve });
+  });
+}
+
+export function ConfirmHost() {
+  const [dlg, setDlg] = useState(null);
+  useEffect(() => {
+    _confirmListener = (d) => setDlg(d);
+    return () => { _confirmListener = null; };
+  }, []);
+  const finish = (val) => { setDlg(cur => { if (cur) cur.resolve(val); return null; }); };
+  useEffect(() => {
+    if (!dlg) return;
+    const onKey = (e) => { if (e.key === "Escape") finish(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dlg]);
+  if (!dlg) return null;
+  const danger = dlg.tone === "danger" || dlg.danger;
+  const accent = danger ? T.red : T.gold;
+  const confirmLabel = dlg.confirmLabel || (danger ? "Excluir" : "Confirmar");
+  const cancelLabel = dlg.cancelLabel || "Cancelar";
+  return (
+    <div onClick={() => finish(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", backdropFilter: "blur(3px)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, animation: "fh-fade .13s ease" }}>
+      <div onClick={e => e.stopPropagation()} className="fh-card" role="alertdialog" aria-modal="true" style={{ width: 440, maxWidth: "100%", borderColor: accent + "66", overflow: "hidden" }}>
+        <div style={{ padding: "18px 22px 4px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <span style={{ fontSize: 20, lineHeight: 1.2, flexShrink: 0 }}>{dlg.icon || (danger ? "⚠️" : "❔")}</span>
+          <div style={{ minWidth: 0 }}>
+            {dlg.title && <div style={{ fontSize: 16, fontWeight: 800, color: accent, letterSpacing: 0.2 }}>{dlg.title}</div>}
+            {dlg.message && <div style={{ fontSize: 13.5, color: T.mut, lineHeight: 1.6, marginTop: dlg.title ? 8 : 0, whiteSpace: "pre-line" }}>{dlg.message}</div>}
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "16px 22px 18px" }}>
+          <Button variant="ghost" size="sm" onClick={() => finish(false)}>{cancelLabel}</Button>
+          <Button variant={danger ? "danger" : "primary"} size="sm" autoFocus onClick={() => finish(true)}>{confirmLabel}</Button>
+        </div>
       </div>
     </div>
   );
