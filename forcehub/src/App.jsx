@@ -1445,7 +1445,12 @@ function MinhaCarteira() {
     setPosicoes(list); salvar(list);
     setForm(CARTEIRA_FORM_VAZIO); setShowForm(false);
   };
-  const remover = (id) => { const list = posicoes.filter(p => p.id !== id); setPosicoes(list); salvar(list); };
+  const remover = (id) => {
+    const p = posicoes.find(x => x.id === id);
+    const rot = p ? (p.kind === "opcao" ? p.symbol : p.ticker) : "esta posição";
+    if (!window.confirm(`Remover ${rot} da sua carteira?\n\nA posição e o resultado dela saem da carteira. Não dá para desfazer.`)) return;
+    const list = posicoes.filter(p => p.id !== id); setPosicoes(list); salvar(list);
+  };
   const fechar = (id, precoSaida) => {
     const list = posicoes.map(p => {
       if (p.id !== id) return p;
@@ -1758,11 +1763,17 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     setForm(FORM_VAZIO); setFormErro("");
     setShowForm(false);
   };
-  const removeAcao = (id) => {
+  const doRemoveAcao = (id) => {
     const alvo = acoes.find(x => x.id === id);
     const next = acoes.filter(x => x.id !== id);
     setAcoes(next); saveRecs(next);
     if (alvo && alvo.hasImage) { api.post("/api/carteira?img=" + id, { data: null }).catch(() => {}); }
+  };
+  const removeAcao = (id) => {
+    const a = acoes.find(x => x.id === id);
+    const rot = a ? a.ticker : "esta recomendação";
+    if (!window.confirm(`Excluir a recomendação de ${rot}?\n\nEla sai da carteira para todos os clientes. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.`)) return;
+    doRemoveAcao(id);
   };
   const addFromScan = (op) => {
     // Não publica recomendação com preços inválidos (evita persistir entrada/
@@ -1798,6 +1809,9 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     setAba("posicoes");
   };
   const removerPosicao = (posId) => {
+    const p = posicoes.find(x => x.posId === posId);
+    const rot = p ? p.ticker : "esta operação";
+    if (!window.confirm(`Descartar ${rot}?\n\nA operação sai da sua carteira e não será mais acompanhada. Não dá para desfazer.`)) return;
     const nextPos = posicoes.filter(p => p.posId !== posId);
     setPosicoes(nextPos); savePos(nextPos);
   };
@@ -1828,7 +1842,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
     const a = acoes.find(x => x.id === id);
     const rot = a ? a.ticker : "esta recomendação";
     if (!window.confirm(`Excluir ${rot} do histórico de recomendações?\n\nSai do desempenho/track record e não conta como call realizada. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.`)) return;
-    removeAcao(id);
+    doRemoveAcao(id);
   };
   // Admin encerra a call -> resultado oficial (entra no track record compartilhado).
   const encerrarRec = (id, precoSaida) => {
