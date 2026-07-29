@@ -1074,7 +1074,11 @@ function LivePanel({ item, cot }) {
   );
 }
 
-function PosicaoRow({ p, cot, onFechar, onRemove }) {
+function PosicaoRow({ p, cot, onFechar, onRemove, onExcluir, canManage }) {
+  // Botão de exclusão do staff (qualquer status) — hard delete, não contabiliza.
+  const StaffDel = () => (canManage && onExcluir)
+    ? <button className="fh-btn" onClick={() => onExcluir(p.posId)} title="Excluir posição (staff) — não contabiliza" style={{ background: "transparent", border: "1px solid " + T.red + "55", color: T.red, borderRadius: 8, width: 30, height: 32, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="trash" size={14} /></button>
+    : null;
   const [saida, setSaida] = useState("");
   const aguardando = isAguardando(p);
   const expirada = p.status === "EXPIRADA";
@@ -1102,7 +1106,10 @@ function PosicaoRow({ p, cot, onFechar, onRemove }) {
       <div style={{ fontSize: 15, fontWeight: 700, color: pctColor }}>{pctVal == null ? "—" : (pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%"}</div>
       <div>
         {expirada ? (
-          <Badge tone="mut" title={p.invalidadaPor === "alvo" ? "Preço atingiu o alvo sem acionar a entrada — o movimento aconteceu sem você" : p.invalidadaPor === "stop" ? "Preço atingiu o stop sem acionar a entrada — premissa da operação quebrada" : "Não acionada dentro do prazo de validade"}>✖ {p.invalidadaPor === "alvo" ? "alvo sem acionar" : p.invalidadaPor === "stop" ? "stop sem acionar" : "não acionada"}{p.expirouEm ? " · " + p.expirouEm : ""}</Badge>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <Badge tone="mut" title={p.invalidadaPor === "alvo" ? "Preço atingiu o alvo sem acionar a entrada — o movimento aconteceu sem você" : p.invalidadaPor === "stop" ? "Preço atingiu o stop sem acionar a entrada — premissa da operação quebrada" : "Não acionada dentro do prazo de validade"}>✖ {p.invalidadaPor === "alvo" ? "alvo sem acionar" : p.invalidadaPor === "stop" ? "stop sem acionar" : "não acionada"}{p.expirouEm ? " · " + p.expirouEm : ""}</Badge>
+            <StaffDel />
+          </div>
         ) : aguardando ? (
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <Badge tone="gold">⏳ aguardando R$ {Number(p.entrada).toFixed(2)}</Badge>
@@ -1115,7 +1122,10 @@ function PosicaoRow({ p, cot, onFechar, onRemove }) {
             {onRemove && <button className="fh-btn" onClick={() => onRemove(p.posId)} title="Descartar (não participei)" style={{ background: "transparent", border: "1px solid " + T.line, color: T.dim, borderRadius: 8, width: 30, height: 32, fontSize: 16 }}>×</button>}
           </div>
         ) : (
-          <Badge tone="mut">{p.fechadoAuto ? (p.motivoFechamento === "alvo" ? "🎯 " : "🛑 ") : "✓ "}{p.dataSaida}</Badge>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <Badge tone="mut">{p.fechadoAuto ? (p.motivoFechamento === "alvo" ? "🎯 " : "🛑 ") : "✓ "}{p.dataSaida}</Badge>
+            <StaffDel />
+          </div>
         )}
       </div>
     </div>
@@ -1621,6 +1631,7 @@ function CarteiraRow({ p, cot, onFechar, onRemove }) {
 
 function CarteiraScreen({ session, canWrite, canPortfolio }) {
   const uid = session?.user;
+  const isStaff = session?.role === "superadmin" || session?.role === "moderator";
   const [acoes, setAcoes] = useState([]);
   const [posicoes, setPosicoes] = useState([]);
   const [incluirDiario, setIncluirDiario] = useState(() => getIncluirCarteira(session?.user));
@@ -1789,6 +1800,35 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
   const removerPosicao = (posId) => {
     const nextPos = posicoes.filter(p => p.posId !== posId);
     setPosicoes(nextPos); savePos(nextPos);
+  };
+  // Exclusão pelo staff (super admin/moderador): apaga a posição em QUALQUER
+  // status — inclusive encerrada/expirada — e remove a linha espelhada no Diário
+  // (ext "carteira:<posId>"), para que a operação não contabilize em lugar nenhum.
+  // Ex.: o Victor aceitou uma call sem querer e a operação já tinha fechado.
+  const excluirPosicao = async (posId) => {
+    const alvo = posicoes.find(p => p.posId === posId);
+    const rot = alvo ? (alvo.ticker || "esta posição") : "esta posição";
+    if (!window.confirm(`Excluir ${rot} da carteira?\n\nA operação será removida por completo e não contará como realizada (nem no desempenho, nem no Diário/Dashboard). Não dá para desfazer.`)) return;
+    const nextPos = posicoes.filter(p => p.posId !== posId);
+    setPosicoes(nextPos); savePos(nextPos);
+    // Limpa a linha espelhada no Diário (conta real), se houver.
+    try {
+      const cur = await api.get("/api/trades?account=real");
+      const trades = Array.isArray(cur.trades) ? cur.trades : [];
+      const ext = cartExtOf(posId);
+      if (trades.some(t => t && t.ext === ext)) {
+        await api.post("/api/trades?account=real", { trades: trades.filter(t => !(t && t.ext === ext)), valorR: cur.valorR || null });
+      }
+    } catch (_) { /* best-effort */ }
+  };
+  // Exclusão de recomendação pelo staff, em qualquer status (inclusive já
+  // encerrada): remove do histórico/desempenho. Não mexe nas posições que alunos
+  // eventualmente aceitaram (cada um gere a sua). removeAcao cuida da imagem.
+  const excluirRec = (id) => {
+    const a = acoes.find(x => x.id === id);
+    const rot = a ? a.ticker : "esta recomendação";
+    if (!window.confirm(`Excluir ${rot} do histórico de recomendações?\n\nSai do desempenho/track record e não conta como call realizada. Não afeta posições que alunos já tenham aceitado. Não dá para desfazer.`)) return;
+    removeAcao(id);
   };
   // Admin encerra a call -> resultado oficial (entra no track record compartilhado).
   const encerrarRec = (id, precoSaida) => {
@@ -2079,7 +2119,7 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                   <div style={{ display: "grid", gridTemplateColumns: "84px 1fr 90px 90px 90px 90px 80px 190px", gap: 8, padding: "11px 16px", background: T.panel2, borderBottom: "1px solid " + T.line }}>
                     {["TICKER", "EMPRESA", "ENTRADA", "ALVO", "STOP", "SAÍDA", "RENT.%", "FECHAR"].map(h => <div key={h} style={{ fontSize: 11, color: T.dim, letterSpacing: 0.5 }}>{h}</div>)}
                   </div>
-                  {posPg.slice.map(p => <PosicaoRow key={p.posId} p={p} cot={cotacoes[p.ticker]} onFechar={fecharPosicao} onRemove={removerPosicao} />)}
+                  {posPg.slice.map(p => <PosicaoRow key={p.posId} p={p} cot={cotacoes[p.ticker]} onFechar={fecharPosicao} onRemove={removerPosicao} onExcluir={excluirPosicao} canManage={isStaff} />)}
                 </div>
               </div>
               <Pager info={posPg} setPage={setPosPage} label="posições" />
@@ -2124,7 +2164,10 @@ function CarteiraScreen({ session, canWrite, canPortfolio }) {
                           <div style={{ fontSize: 13, color: T.mut }}>R$ {px(a.entrada)} → R$ {a.precoSaida != null ? a.precoSaida.toFixed(2) : "—"}</div>
                           <div style={{ fontSize: 15, fontWeight: 700, color: a.resultado >= 0 ? T.green : T.red }}>{(a.resultado >= 0 ? "+" : "") + a.resultado.toFixed(2)}%</div>
                           <div style={{ fontSize: 13, color: rrColor(rr) }}>1:{rr.toFixed(1)}</div>
-                          <div style={{ fontSize: 12, color: T.dim }}>{a.dataSaida || "—"}</div>
+                          <div style={{ fontSize: 12, color: T.dim, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                            <span>{a.dataSaida || "—"}</span>
+                            {isStaff && <button className="fh-btn" onClick={() => excluirRec(a.id)} title="Excluir do histórico (staff)" style={{ background: "transparent", border: "1px solid " + T.red + "55", color: T.red, borderRadius: 8, width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon name="trash" size={13} /></button>}
+                          </div>
                         </div>
                       );
                     })}
