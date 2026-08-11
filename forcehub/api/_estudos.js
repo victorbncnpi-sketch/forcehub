@@ -6,10 +6,11 @@
 // (máxima − mínima) é derivada na leitura, em pontos e em % do fechamento.
 //
 // FONTE DO MINI ÍNDICE — duas, em ordem de preferência:
-//   1) Série EMENDADA (o "WINFUT"): montada por nós em _market-data.js, juntando
-//      o histórico de cada contrato e ficando, em cada dia, com o contrato que
-//      era o vigente naquela data. A brapi não expõe símbolo contínuo pronto.
-//      Cobre anos e, por construção, cada dia vem do contrato líquido da época.
+//   1) Série EMENDADA (o "WINFUT"): montada por nós em _market-data.js a partir
+//      da lista real de contratos (incluindo os vencidos), ficando em cada dia
+//      com o contrato que era o vigente naquela data. A brapi não expõe símbolo
+//      contínuo pronto. Cobre anos e, por construção, cada dia vem do contrato
+//      líquido da época.
 //   2) CONTRATO vigente (WINQ26...): plano B, se a emenda falhar. Um contrato só
 //      enxerga a própria vida útil, então rende ~2 meses e "reinicia" a cada
 //      rolagem.
@@ -92,7 +93,7 @@ export async function coletarAmplitude(redis, { force = false } = {}) {
   // Mini índice: série emendada e, se falhar, o contrato vigente sozinho.
   // Sem proxy para o Ibovespa em hipótese alguma (ver cabeçalho).
   let win = null;
-  try { const e = await fetchWinEmendado(redis); win = { bars: e.bars, src: `emendada:${e.contratos.length} contratos`, emendada: true }; }
+  try { const e = await fetchWinEmendado(redis); win = { bars: e.bars, src: `emendada (${e.fonte}): ${e.contratos.length} contratos`, emendada: true }; }
   catch (e1) {
     try { const f = await fetchFuture("WIN"); win = { bars: f.bars, src: "contrato:" + f.symbol, emendada: false }; }
     catch (e2) { errors.push({ ativo: "WIN", error: String(e1 && e1.message || e1) + " | " + String(e2 && e2.message || e2) }); }

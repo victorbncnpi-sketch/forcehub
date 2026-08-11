@@ -100,25 +100,25 @@ export function pickFront(contracts, todayBRT) {
 }
 
 // ── Série contínua do mini índice, emendada por nós ("WINFUT") ──
-// A brapi NÃO expõe um símbolo contínuo: WINFUT, WIN1!, WIN$, WIN$N e até WIN
-// puro devolvem 404 no /historical, que exige um CONTRATO específico
+// A brapi NÃO expõe um símbolo contínuo pronto: WINFUT, WIN1!, WIN$, WIN$N e até
+// WIN puro devolvem 404 no /historical, que exige um CONTRATO específico
 // (confirmado em produção com token PRO via ?probe=winfut).
 //
-// Então montamos a série: geramos os códigos dos contratos passados, baixamos o
-// histórico de cada um e, para cada dia, ficamos com a barra do contrato que era
-// o VIGENTE naquela data. É exatamente assim que uma série contínua é composta.
+// Montamos a série então: pegamos a lista REAL de contratos do ativo (inclusive
+// os vencidos, via includeExpired), baixamos o histórico de cada um e, para cada
+// dia, ficamos com a barra do contrato que era o VIGENTE naquela data. É assim
+// que uma série contínua se compõe.
 //
-// WIN/IND vencem em meses PARES (G=fev, J=abr, M=jun, Q=ago, V=out, Z=dez), na
-// quarta-feira mais próxima do dia 15 — aproximamos por dia 15. O erro de 1-2
-// dias cai justamente na virada, quando os dois contratos têm amplitude
-// parecida, então não contamina o estudo.
+// A lista traz `lastTradeDate` — o último pregão real de cada contrato —, então
+// o corte entre um contrato e o seguinte é exato, sem aproximação de calendário.
 //
-// Para AMPLITUDE (máxima − mínima do dia) a emenda não precisa de ajuste de
-// gap: o salto da rolagem desloca o NÍVEL de preço, não a variação dentro de um
-// mesmo pregão. A amplitude diária é idêntica com ou sem ajuste.
+// Para AMPLITUDE (máxima − mínima do dia) a emenda não precisa de ajuste de gap:
+// o salto da rolagem desloca o NÍVEL de preço, não a variação dentro de um mesmo
+// pregão. A amplitude diária é idêntica com ou sem ajuste.
 const COD_MES = { 2: "G", 4: "J", 6: "M", 8: "Q", 10: "V", 12: "Z" };
 
-// Contratos do mais antigo ao mais novo, incluindo um vencimento à frente.
+// Plano B, se a listagem falhar: gera os códigos pela convenção do WIN/IND
+// (vencimentos em meses pares), aproximando o vencimento pelo dia 15.
 export function contratosWin(mesesAtras = 30, hojeISO) {
   const hoje = hojeISO || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
   const [ay, am] = hoje.split("-").map(Number);
@@ -127,8 +127,37 @@ export function contratosWin(mesesAtras = 30, hojeISO) {
     const tot = ay * 12 + (am - 1) + d;
     const ano = Math.floor(tot / 12), mes = (tot % 12) + 1;
     if (!COD_MES[mes]) continue;
-    out.push({ symbol: `WIN${COD_MES[mes]}${String(ano).slice(-2)}`, exp: `${ano}-${String(mes).padStart(2, "0")}-15` });
+    out.push({ symbol: `WIN${COD_MES[mes]}${String(ano).slice(-2)}`, exp: `${ano}-${String(mes).padStart(2, "0")}-15`, ultimo: null });
   }
+  return out;
+}
+
+// Lista real de contratos de um ativo, incluindo os já vencidos (é isso que
+// permite reconstruir o histórico). Resposta paginada; cache de 1 dia.
+export async function listarContratosFuturos(asset, redis, { includeExpired = true } = {}) {
+  const key = `forcehub:fut:list:${asset}:${includeExpired ? 1 : 0}`;
+  if (redis) { try { const c = await redis.get(key); if (c && Array.isArray(c.contratos) && c.contratos.length) return c.contratos; } catch (_) {} }
+  if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");
+  const tok = `&token=${BRAPI_TOKEN}`;
+  const out = [];
+  let page = 1, totalPages = 1;
+  do {
+    const j = await getJson(`${FUT}/list?asset=${encodeURIComponent(asset)}&includeExpired=${includeExpired}&limit=100&page=${page}${tok}`, 2);
+    for (const f of (Array.isArray(j && j.futures) ? j.futures : [])) {
+      if (!f || !f.symbol || !f.expirationDate) continue;
+      out.push({
+        symbol: f.symbol,
+        exp: String(f.expirationDate).slice(0, 10),
+        primeiro: f.firstTradeDate ? String(f.firstTradeDate).slice(0, 10) : null,
+        ultimo: f.lastTradeDate ? String(f.lastTradeDate).slice(0, 10) : null,
+      });
+    }
+    totalPages = Math.max(1, Number(j && j.pagination && j.pagination.totalPages) || 1);
+    page++;
+  } while (page <= totalPages && page <= 20); // trava de segurança contra loop
+  if (!out.length) throw new Error(`sem contratos para ${asset}`);
+  out.sort((a, b) => a.exp.localeCompare(b.exp));
+  if (redis) { try { await redis.set(key, { contratos: out }, { ex: 60 * 60 * 24 }); } catch (_) {} }
   return out;
 }
 
@@ -149,19 +178,30 @@ export async function fetchContratoBars(symbol, redis, vencido) {
   return bars;
 }
 
+const menosMeses = (iso, meses) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const tot = y * 12 + (m - 1) - meses;
+  return `${Math.floor(tot / 12)}-${String((tot % 12) + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+};
+
 export async function fetchWinEmendado(redis, mesesAtras = 30) {
   const hojeISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-  const contratos = contratosWin(mesesAtras, hojeISO);
-  const res = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, c.exp < hojeISO)));
+  const limite = menosMeses(hojeISO, mesesAtras);
+  let contratos, fonte;
+  try { contratos = (await listarContratosFuturos("WIN", redis)).filter(c => c.exp >= limite); fonte = "lista"; }
+  catch (_) { contratos = contratosWin(mesesAtras, hojeISO); fonte = "gerado"; }
+
+  const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, (c.ultimo || c.exp) < hojeISO)));
 
   const porDia = new Map(); // data -> { bar, exp do contrato escolhido }
   const usados = [];
   contratos.forEach((c, i) => {
-    const bars = res[i].status === "fulfilled" ? res[i].value : [];
+    const bars = hist[i].status === "fulfilled" ? hist[i].value : [];
     if (!bars.length) return;
     usados.push(c.symbol);
+    const fim = c.ultimo || c.exp;                 // último pregão real do contrato
     for (const b of bars) {
-      if (b.date > c.exp) continue;                  // barra depois do vencimento: descarta
+      if (b.date > fim) continue;
       const cur = porDia.get(b.date);
       if (!cur || c.exp < cur.exp) porDia.set(b.date, { bar: b, exp: c.exp }); // vence o vencimento mais próximo
     }
@@ -169,7 +209,7 @@ export async function fetchWinEmendado(redis, mesesAtras = 30) {
 
   const bars = [...porDia.keys()].sort().map(d => porDia.get(d).bar);
   if (!bars.length) throw new Error("nenhum contrato WIN com histórico");
-  return { bars, contratos: usados };
+  return { bars, contratos: usados, fonte };
 }
 
 export async function fetchFuture(asset) {
@@ -230,25 +270,37 @@ export default async function handler(req, res) {
   }
 
   // Diagnóstico da emenda do mini índice: /api/market-data?probe=winfut
-  // Mostra, contrato a contrato, quantas barras vieram e o intervalo coberto, e
-  // o resultado da emenda (total de pregões e a janela completa da série). É o
-  // que confirma se o estudo tem histórico longo ou só o contrato vigente.
+  // Mostra a lista de contratos que a brapi devolve (com includeExpired), a
+  // cobertura de histórico contrato a contrato e o resultado da emenda. É o que
+  // confirma se o estudo tem histórico longo ou só o contrato vigente.
   if (req.query.probe === "winfut") {
     const redis = getRedis();
     const hojeISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-    const contratos = contratosWin(30, hojeISO);
-    const out = { contratos: {}, emenda: null };
-    const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, c.exp < hojeISO)));
+    const meses = Math.min(Math.max(parseInt(req.query.meses) || 30, 2), 120);
+    const out = { meses, lista: null, contratos: {}, emenda: null };
+
+    let contratos = [];
+    try {
+      const todos = await listarContratosFuturos("WIN", redis);
+      out.lista = { fonte: "brapi /futures/list", total: todos.length, primeiro: todos[0] || null, ultimo: todos[todos.length - 1] || null };
+      contratos = todos.slice(-Math.ceil(meses / 2) - 2);
+    } catch (e) {
+      out.lista = { fonte: "gerado (listagem falhou)", erro: String((e && e.message) || e) };
+      contratos = contratosWin(meses, hojeISO);
+    }
+
+    const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, (c.ultimo || c.exp) < hojeISO)));
     contratos.forEach((c, i) => {
       const bars = hist[i].status === "fulfilled" ? hist[i].value : [];
       out.contratos[c.symbol] = bars.length
-        ? { barras: bars.length, de: bars[0].date, ate: bars[bars.length - 1].date }
-        : { barras: 0, erro: hist[i].status === "rejected" ? String(hist[i].reason) : "sem barras" };
+        ? { venc: c.exp, ultimoPregao: c.ultimo, barras: bars.length, de: bars[0].date, ate: bars[bars.length - 1].date }
+        : { venc: c.exp, barras: 0, erro: hist[i].status === "rejected" ? String(hist[i].reason) : "sem barras" };
     });
+
     try {
-      const e = await fetchWinEmendado(redis, 30);
+      const e = await fetchWinEmendado(redis, meses);
       out.emenda = {
-        pregoes: e.bars.length, de: e.bars[0].date, ate: e.bars[e.bars.length - 1].date,
+        fonte: e.fonte, pregoes: e.bars.length, de: e.bars[0].date, ate: e.bars[e.bars.length - 1].date,
         contratosUsados: e.contratos,
         amostra: e.bars.slice(-3).map(b => ({ date: b.date, amplitude: +(b.high - b.low).toFixed(1) })),
       };
