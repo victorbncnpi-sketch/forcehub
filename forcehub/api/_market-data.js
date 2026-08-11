@@ -112,6 +112,13 @@ export function pickFront(contracts, todayBRT) {
 // A lista traz `lastTradeDate` — o último pregão real de cada contrato —, então
 // o corte entre um contrato e o seguinte é exato, sem aproximação de calendário.
 //
+// ALCANCE: o /historical serve uma janela MÓVEL DE ~1 ANO. Medido em produção:
+// contratos com vidas bem diferentes (WINQ25, WINV25, WINZ25, WING26) começam
+// todos na mesma data, exatamente 12 meses antes de hoje; e um contrato que
+// venceu antes disso volta vazio. Ou seja, a emenda rende ~1 ano (241 pregões
+// na primeira medição) e é esse o teto da fonte — não do método. Passar disso
+// depende do acúmulo em Redis, que guarda cada dia coletado para sempre.
+//
 // Para AMPLITUDE (máxima − mínima do dia) a emenda não precisa de ajuste de gap:
 // o salto da rolagem desloca o NÍVEL de preço, não a variação dentro de um mesmo
 // pregão. A amplitude diária é idêntica com ou sem ajuste.
@@ -178,6 +185,16 @@ export async function fetchContratoBars(symbol, redis, vencido) {
   return bars;
 }
 
+// Só interessam os contratos que podem ter sido o VIGENTE em algum dia da
+// janela: os que vencem dentro dela, até o vencimento do contrato vigente hoje.
+// Um contrato que vence depois disso é back month em todos os dias passados e
+// nunca ganha uma data na emenda — buscar o histórico dele é requisição jogada
+// fora (na primeira medição, 8 dos 16 contratos).
+export function contratosRelevantes(contratos, limite, hojeISO) {
+  const teto = contratos.filter(c => c.exp >= hojeISO).map(c => c.exp).sort()[0] || hojeISO;
+  return contratos.filter(c => c.exp >= limite && c.exp <= teto);
+}
+
 const menosMeses = (iso, meses) => {
   const [y, m, d] = iso.split("-").map(Number);
   const tot = y * 12 + (m - 1) - meses;
@@ -188,8 +205,8 @@ export async function fetchWinEmendado(redis, mesesAtras = 30) {
   const hojeISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
   const limite = menosMeses(hojeISO, mesesAtras);
   let contratos, fonte;
-  try { contratos = (await listarContratosFuturos("WIN", redis)).filter(c => c.exp >= limite); fonte = "lista"; }
-  catch (_) { contratos = contratosWin(mesesAtras, hojeISO); fonte = "gerado"; }
+  try { contratos = contratosRelevantes(await listarContratosFuturos("WIN", redis), limite, hojeISO); fonte = "lista"; }
+  catch (_) { contratos = contratosRelevantes(contratosWin(mesesAtras, hojeISO), limite, hojeISO); fonte = "gerado"; }
 
   const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, (c.ultimo || c.exp) < hojeISO)));
 
@@ -283,10 +300,11 @@ export default async function handler(req, res) {
     try {
       const todos = await listarContratosFuturos("WIN", redis);
       out.lista = { fonte: "brapi /futures/list", total: todos.length, primeiro: todos[0] || null, ultimo: todos[todos.length - 1] || null };
-      contratos = todos.slice(-Math.ceil(meses / 2) - 2);
+      out.lista.observacao = "só os contratos que podem ter sido o vigente na janela são buscados";
+      contratos = contratosRelevantes(todos, menosMeses(hojeISO, meses), hojeISO);
     } catch (e) {
       out.lista = { fonte: "gerado (listagem falhou)", erro: String((e && e.message) || e) };
-      contratos = contratosWin(meses, hojeISO);
+      contratos = contratosRelevantes(contratosWin(meses, hojeISO), menosMeses(hojeISO, meses), hojeISO);
     }
 
     const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, (c.ultimo || c.exp) < hojeISO)));
