@@ -99,6 +99,31 @@ export function pickFront(contracts, todayBRT) {
   return dated.slice().sort((a, b) => b.expirationDate.localeCompare(a.expirationDate))[0];
 }
 
+// ── Brapi: série CONTÍNUA ("WINFUT") ──
+// É o que as plataformas (Profit/TradingView) chamam de WINFUT / WIN1!: uma
+// série única que sempre aponta para o contrato vigente, já emendada nas
+// rolagens. Vale muito mais que o contrato isolado para estudo histórico, mas
+// nem toda fonte expõe, e cada uma usa uma convenção de símbolo. Tenta as mais
+// comuns e devolve a primeira que responder com barras.
+//
+// Para AMPLITUDE (máxima − mínima do dia) tanto faz se a emenda é ajustada ou
+// crua: o "gap" de rolagem desloca o NÍVEL de preço, não a variação de um mesmo
+// dia. A amplitude diária é idêntica nos dois casos.
+export const WIN_CONTINUOS = ["WINFUT", "WIN1!", "WIN$", "WIN$N", "WIN"];
+
+export async function fetchFuturoContinuo(candidatos = WIN_CONTINUOS) {
+  if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");
+  const tok = `&token=${BRAPI_TOKEN}`;
+  for (const sym of candidatos) {
+    // tries=1: são vários candidatos e a maioria vai falhar; sem retry fica rápido.
+    try {
+      const bars = mapBars(findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(sym)}${tok}`, 1)) || []);
+      if (bars.length > 5) return { bars, symbol: sym };
+    } catch (_) { /* tenta o próximo candidato */ }
+  }
+  throw new Error("nenhuma série contínua disponível");
+}
+
 export async function fetchFuture(asset) {
   // Sempre com o token PRO: sem ele, nem tenta o sandbox grátis (limites e
   // instabilidade) — cai direto no fallback do chamador (Ibov/USDBRL proxy).
@@ -154,6 +179,28 @@ export default async function handler(req, res) {
       } catch (e) { out[asset].error = String((e && e.message) || e); }
     }
     return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
+  }
+
+  // Diagnóstico da série contínua: /api/market-data?probe=winfut
+  // Descobre se a brapi expõe o "WINFUT" (série emendada do mini índice) e sob
+  // qual símbolo. Para cada candidato mostra quantas barras vieram e o intervalo
+  // coberto — é isso que decide se o estudo de amplitude usa a série contínua
+  // (histórico longo, sempre no contrato vigente) ou a emenda por contrato.
+  if (req.query.probe === "winfut") {
+    const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+    const out = {};
+    for (const sym of WIN_CONTINUOS) {
+      out[sym] = {};
+      try {
+        const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(sym)}${tok}`, 1)) || [];
+        const bars = mapBars(raw);
+        out[sym].barras = bars.length;
+        out[sym].de = bars.length ? bars[0].date : null;
+        out[sym].ate = bars.length ? bars[bars.length - 1].date : null;
+        out[sym].amostra = bars.slice(-3).map(b => ({ date: b.date, high: b.high, low: b.low, amplitude: +(b.high - b.low).toFixed(1) }));
+      } catch (e) { out[sym].error = String((e && e.message) || e); }
+    }
+    return res.status(200).json({ ok: true, tokenUsed: !!BRAPI_TOKEN, probe: out });
   }
 
   // Diagnóstico dos futuros agrícolas: /api/market-data?probe=agro
