@@ -229,15 +229,20 @@ export async function fetchWinEmendado(redis, mesesAtras = 30) {
   });
 
   // ESCOLHA DO DIA — rolagem por VOLUME, entre os dois vencimentos mais
-  // próximos: fica com o de maior volume. A rolagem real não acontece na data do
-  // vencimento, e sim quando a liquidez migra, alguns dias antes; até lá o
-  // contrato que vence já está esvaziando e a amplitude dele subestima o
-  // mercado. Medido na série: em 12/08/2025, penúltima sessão do WINQ25, a
-  // amplitude do mini índice saiu MENOR que a do Ibovespa à vista (razão 0,87),
-  // o que é estruturalmente impossível num pregão normal — o futuro negocia mais
-  // horas. Limitar aos dois vencimentos mais próximos impede que um negócio
-  // isolado num contrato distante roube o dia.
-  // Sem volume nos dois lados, cai na regra de calendário (vencimento mais próximo).
+  // próximos: fica com o de maior volume. Quem manda na rolagem é a migração da
+  // liquidez, não uma data de calendário, então a regra pergunta isso ao dado em
+  // vez de supor.
+  //
+  // O que a série mostrou sobre o mini índice: a migração é TARDIA. Em 5 das 6
+  // rolagens do ano o volume só passou para o contrato seguinte NO PRÓPRIO DIA
+  // do vencimento — um dia antes do que a regra de calendário faria, e nunca
+  // vários dias antes. Ou seja, o contrato que está vencendo continua sendo o
+  // mais negociado até a última sessão. (A hipótese inicial era outra: que ele
+  // esvaziasse dias antes e distorcesse a amplitude. O volume não sustenta isso.)
+  //
+  // Limitar aos dois vencimentos mais próximos impede que um negócio isolado num
+  // contrato distante roube o dia. Sem volume dos dois lados, cai na regra de
+  // calendário (vencimento mais próximo).
   const bars = [], rolagens = [];
   for (const d of [...cand.keys()].sort()) {
     const [a, b] = cand.get(d).sort((x, y) => x.exp.localeCompare(y.exp));
