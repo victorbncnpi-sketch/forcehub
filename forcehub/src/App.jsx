@@ -4197,7 +4197,7 @@ function AmplitudeChart({ pontos, modo }) {
   );
 }
 
-const JANELAS = [{ k: 30, r: "30 dias" }, { k: 60, r: "60 dias" }, { k: 0, r: "Tudo" }];
+const JANELAS = [{ k: 30, r: "30 dias" }, { k: 60, r: "60 dias" }, { k: 120, r: "6 meses" }, { k: 0, r: "Tudo" }];
 
 function EstudoAmplitude() {
   const [serie, setSerie] = useState(null);

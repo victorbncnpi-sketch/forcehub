@@ -99,29 +99,77 @@ export function pickFront(contracts, todayBRT) {
   return dated.slice().sort((a, b) => b.expirationDate.localeCompare(a.expirationDate))[0];
 }
 
-// ── Brapi: série CONTÍNUA ("WINFUT") ──
-// É o que as plataformas (Profit/TradingView) chamam de WINFUT / WIN1!: uma
-// série única que sempre aponta para o contrato vigente, já emendada nas
-// rolagens. Vale muito mais que o contrato isolado para estudo histórico, mas
-// nem toda fonte expõe, e cada uma usa uma convenção de símbolo. Tenta as mais
-// comuns e devolve a primeira que responder com barras.
+// ── Série contínua do mini índice, emendada por nós ("WINFUT") ──
+// A brapi NÃO expõe um símbolo contínuo: WINFUT, WIN1!, WIN$, WIN$N e até WIN
+// puro devolvem 404 no /historical, que exige um CONTRATO específico
+// (confirmado em produção com token PRO via ?probe=winfut).
 //
-// Para AMPLITUDE (máxima − mínima do dia) tanto faz se a emenda é ajustada ou
-// crua: o "gap" de rolagem desloca o NÍVEL de preço, não a variação de um mesmo
-// dia. A amplitude diária é idêntica nos dois casos.
-export const WIN_CONTINUOS = ["WINFUT", "WIN1!", "WIN$", "WIN$N", "WIN"];
+// Então montamos a série: geramos os códigos dos contratos passados, baixamos o
+// histórico de cada um e, para cada dia, ficamos com a barra do contrato que era
+// o VIGENTE naquela data. É exatamente assim que uma série contínua é composta.
+//
+// WIN/IND vencem em meses PARES (G=fev, J=abr, M=jun, Q=ago, V=out, Z=dez), na
+// quarta-feira mais próxima do dia 15 — aproximamos por dia 15. O erro de 1-2
+// dias cai justamente na virada, quando os dois contratos têm amplitude
+// parecida, então não contamina o estudo.
+//
+// Para AMPLITUDE (máxima − mínima do dia) a emenda não precisa de ajuste de
+// gap: o salto da rolagem desloca o NÍVEL de preço, não a variação dentro de um
+// mesmo pregão. A amplitude diária é idêntica com ou sem ajuste.
+const COD_MES = { 2: "G", 4: "J", 6: "M", 8: "Q", 10: "V", 12: "Z" };
 
-export async function fetchFuturoContinuo(candidatos = WIN_CONTINUOS) {
-  if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");
-  const tok = `&token=${BRAPI_TOKEN}`;
-  for (const sym of candidatos) {
-    // tries=1: são vários candidatos e a maioria vai falhar; sem retry fica rápido.
-    try {
-      const bars = mapBars(findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(sym)}${tok}`, 1)) || []);
-      if (bars.length > 5) return { bars, symbol: sym };
-    } catch (_) { /* tenta o próximo candidato */ }
+// Contratos do mais antigo ao mais novo, incluindo um vencimento à frente.
+export function contratosWin(mesesAtras = 30, hojeISO) {
+  const hoje = hojeISO || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [ay, am] = hoje.split("-").map(Number);
+  const out = [];
+  for (let d = -mesesAtras; d <= 2; d++) {
+    const tot = ay * 12 + (am - 1) + d;
+    const ano = Math.floor(tot / 12), mes = (tot % 12) + 1;
+    if (!COD_MES[mes]) continue;
+    out.push({ symbol: `WIN${COD_MES[mes]}${String(ano).slice(-2)}`, exp: `${ano}-${String(mes).padStart(2, "0")}-15` });
   }
-  throw new Error("nenhuma série contínua disponível");
+  return out;
+}
+
+// Histórico de UM contrato, com cache. Contrato vencido nunca mais muda, então
+// vale cache longo — é o que faz o backfill custar caro só na primeira vez.
+export async function fetchContratoBars(symbol, redis, vencido) {
+  const key = "forcehub:fut:hist:" + symbol;
+  if (redis) { try { const c = await redis.get(key); if (c && Array.isArray(c.bars)) return c.bars; } catch (_) {} }
+  let bars = [];
+  const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
+  try { bars = mapBars(findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(symbol)}${tok}`, 1)) || []); }
+  catch (_) { bars = []; }
+  // Sem barras também é cacheado (TTL curto): evita repetir 404 a cada coleta.
+  if (redis) {
+    const ex = !bars.length ? 60 * 60 * 24 : (vencido ? 60 * 60 * 24 * 180 : 3600);
+    try { await redis.set(key, { bars }, { ex }); } catch (_) {}
+  }
+  return bars;
+}
+
+export async function fetchWinEmendado(redis, mesesAtras = 30) {
+  const hojeISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const contratos = contratosWin(mesesAtras, hojeISO);
+  const res = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, c.exp < hojeISO)));
+
+  const porDia = new Map(); // data -> { bar, exp do contrato escolhido }
+  const usados = [];
+  contratos.forEach((c, i) => {
+    const bars = res[i].status === "fulfilled" ? res[i].value : [];
+    if (!bars.length) return;
+    usados.push(c.symbol);
+    for (const b of bars) {
+      if (b.date > c.exp) continue;                  // barra depois do vencimento: descarta
+      const cur = porDia.get(b.date);
+      if (!cur || c.exp < cur.exp) porDia.set(b.date, { bar: b, exp: c.exp }); // vence o vencimento mais próximo
+    }
+  });
+
+  const bars = [...porDia.keys()].sort().map(d => porDia.get(d).bar);
+  if (!bars.length) throw new Error("nenhum contrato WIN com histórico");
+  return { bars, contratos: usados };
 }
 
 export async function fetchFuture(asset) {
@@ -181,26 +229,31 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, today: todayBRT, tokenUsed: !!BRAPI_TOKEN, probe: out });
   }
 
-  // Diagnóstico da série contínua: /api/market-data?probe=winfut
-  // Descobre se a brapi expõe o "WINFUT" (série emendada do mini índice) e sob
-  // qual símbolo. Para cada candidato mostra quantas barras vieram e o intervalo
-  // coberto — é isso que decide se o estudo de amplitude usa a série contínua
-  // (histórico longo, sempre no contrato vigente) ou a emenda por contrato.
+  // Diagnóstico da emenda do mini índice: /api/market-data?probe=winfut
+  // Mostra, contrato a contrato, quantas barras vieram e o intervalo coberto, e
+  // o resultado da emenda (total de pregões e a janela completa da série). É o
+  // que confirma se o estudo tem histórico longo ou só o contrato vigente.
   if (req.query.probe === "winfut") {
-    const tok = BRAPI_TOKEN ? `&token=${BRAPI_TOKEN}` : "";
-    const out = {};
-    for (const sym of WIN_CONTINUOS) {
-      out[sym] = {};
-      try {
-        const raw = findBarsArray(await getJson(`${FUT}/historical?symbol=${encodeURIComponent(sym)}${tok}`, 1)) || [];
-        const bars = mapBars(raw);
-        out[sym].barras = bars.length;
-        out[sym].de = bars.length ? bars[0].date : null;
-        out[sym].ate = bars.length ? bars[bars.length - 1].date : null;
-        out[sym].amostra = bars.slice(-3).map(b => ({ date: b.date, high: b.high, low: b.low, amplitude: +(b.high - b.low).toFixed(1) }));
-      } catch (e) { out[sym].error = String((e && e.message) || e); }
-    }
-    return res.status(200).json({ ok: true, tokenUsed: !!BRAPI_TOKEN, probe: out });
+    const redis = getRedis();
+    const hojeISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const contratos = contratosWin(30, hojeISO);
+    const out = { contratos: {}, emenda: null };
+    const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, c.exp < hojeISO)));
+    contratos.forEach((c, i) => {
+      const bars = hist[i].status === "fulfilled" ? hist[i].value : [];
+      out.contratos[c.symbol] = bars.length
+        ? { barras: bars.length, de: bars[0].date, ate: bars[bars.length - 1].date }
+        : { barras: 0, erro: hist[i].status === "rejected" ? String(hist[i].reason) : "sem barras" };
+    });
+    try {
+      const e = await fetchWinEmendado(redis, 30);
+      out.emenda = {
+        pregoes: e.bars.length, de: e.bars[0].date, ate: e.bars[e.bars.length - 1].date,
+        contratosUsados: e.contratos,
+        amostra: e.bars.slice(-3).map(b => ({ date: b.date, amplitude: +(b.high - b.low).toFixed(1) })),
+      };
+    } catch (e) { out.emenda = { erro: String((e && e.message) || e) }; }
+    return res.status(200).json({ ok: true, tokenUsed: !!BRAPI_TOKEN, hoje: hojeISO, probe: out });
   }
 
   // Diagnóstico dos futuros agrícolas: /api/market-data?probe=agro

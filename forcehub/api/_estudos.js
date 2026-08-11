@@ -6,12 +6,14 @@
 // (máxima − mínima) é derivada na leitura, em pontos e em % do fechamento.
 //
 // FONTE DO MINI ÍNDICE — duas, em ordem de preferência:
-//   1) Série CONTÍNUA ("WINFUT"): já emendada nas rolagens e sempre no contrato
-//      vigente. É a fonte ideal — histórico longo e sem buracos.
-//   2) CONTRATO vigente (WINQ26...): plano B. Um contrato só enxerga a própria
-//      vida útil, então a série nunca passa de ~2 meses e "reinicia" a cada
+//   1) Série EMENDADA (o "WINFUT"): montada por nós em _market-data.js, juntando
+//      o histórico de cada contrato e ficando, em cada dia, com o contrato que
+//      era o vigente naquela data. A brapi não expõe símbolo contínuo pronto.
+//      Cobre anos e, por construção, cada dia vem do contrato líquido da época.
+//   2) CONTRATO vigente (WINQ26...): plano B, se a emenda falhar. Um contrato só
+//      enxerga a própria vida útil, então rende ~2 meses e "reinicia" a cada
 //      rolagem.
-//   Descubra qual a brapi expõe com /api/market-data?probe=winfut.
+//   Confira o que a brapi está entregando com /api/market-data?probe=winfut.
 //
 // POR QUE ARMAZENAR mesmo assim: com a fonte 2 é indispensável (a coleta
 // incremental é o que faz a série atravessar as rolagens); com a fonte 1 é
@@ -19,24 +21,23 @@
 // range do plano.
 //
 // REGRA DE ESCRITA, e por que ela depende da fonte:
-//   • Série contínua: pode sobrescrever à vontade. Todo dia dela é o dia do
-//     contrato que era vigente na época, ou seja, sempre o dado bom — e
-//     regravar ainda corrige eventuais dias ruins de uma coleta antiga.
-//   • Emenda por contrato: um dia já gravado NUNCA é sobrescrito (exceto hoje,
-//     cuja barra ainda está se formando). Quando o contrato rola, o novo
-//     vigente também traz os dias em que ele era o "segundo" contrato — dias de
-//     liquidez baixa, cuja amplitude subestima o mercado. O primeiro registro
-//     de cada dia é o bom, e é ele que fica.
+//   • Série emendada: pode sobrescrever à vontade. Todo dia dela já vem do
+//     contrato vigente na época, ou seja, sempre o dado bom — e regravar ainda
+//     corrige dias ruins gravados por uma coleta antiga.
+//   • Contrato único: um dia já gravado NUNCA é sobrescrito (exceto hoje, cuja
+//     barra ainda está se formando). O contrato vigente também traz os dias em
+//     que ele era o "segundo" contrato — liquidez baixa, amplitude subestimada.
+//     O primeiro registro de cada dia é o bom, e é ele que fica.
 //
 // SEM FALLBACK PARA O IBOV: o /api/market-data usa o Ibovespa como proxy do WIN
 // quando os futuros falham. Aqui isso seria destrutivo — gravaria o Ibov como
 // se fosse o WIN e produziria correlação artificial de 100%. Se os futuros
 // falharem, o WIN daquela varredura é simplesmente pulado.
-import { fetchIbovBarsFor, fetchFuture, fetchFuturoContinuo } from "./_market-data";
+import { fetchIbovBarsFor, fetchFuture, fetchWinEmendado } from "./_market-data";
 import { getRedis } from "./_redis";
 
 const KEY = "forcehub:estudos:amplitude";
-const MAX_DIAS = 500;                       // ~2 anos de pregões
+const MAX_DIAS = 700;                       // ~2,5 anos de pregões
 const FRESH_MS = 30 * 60 * 1000;            // recoleta no máximo a cada 30 min
 const hoje = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
 const n2 = (v) => (v == null || !isFinite(Number(v))) ? null : +Number(v).toFixed(2);
@@ -82,20 +83,22 @@ export async function coletarAmplitude(redis, { force = false } = {}) {
   const errors = [];
   let novosIbov = 0, novosWin = 0;
 
-  // Ibovespa à vista: 3 meses de uma vez (o backfill inicial já nasce com massa).
-  try { novosIbov = merge(store.dias, await fetchIbovBarsFor(["3mo", "1mo"]), "ibov", today); }
+  // Ibovespa à vista: pede o range mais longo que a fonte aceitar. Precisa
+  // acompanhar o alcance do mini índice — a série do gráfico só usa dias em que
+  // os DOIS têm barra, então um Ibov curto encurtaria o estudo inteiro.
+  try { novosIbov = merge(store.dias, await fetchIbovBarsFor(["2y", "1y", "3mo", "1mo"]), "ibov", today); }
   catch (e) { errors.push({ ativo: "IBOV", error: String(e && e.message || e) }); }
 
-  // Mini índice: série contínua (WINFUT) e, se não houver, o contrato vigente.
+  // Mini índice: série emendada e, se falhar, o contrato vigente sozinho.
   // Sem proxy para o Ibovespa em hipótese alguma (ver cabeçalho).
   let win = null;
-  try { const c = await fetchFuturoContinuo(); win = { bars: c.bars, src: "continuo:" + c.symbol, continua: true }; }
+  try { const e = await fetchWinEmendado(redis); win = { bars: e.bars, src: `emendada:${e.contratos.length} contratos`, emendada: true }; }
   catch (e1) {
-    try { const f = await fetchFuture("WIN"); win = { bars: f.bars, src: "contrato:" + f.symbol, continua: false }; }
+    try { const f = await fetchFuture("WIN"); win = { bars: f.bars, src: "contrato:" + f.symbol, emendada: false }; }
     catch (e2) { errors.push({ ativo: "WIN", error: String(e1 && e1.message || e1) + " | " + String(e2 && e2.message || e2) }); }
   }
   if (win) {
-    novosWin = merge(store.dias, win.bars, "win", today, win.continua);
+    novosWin = merge(store.dias, win.bars, "win", today, win.emendada);
     store.sources.win = win.src;
   }
 
