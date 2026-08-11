@@ -106,11 +106,12 @@ export function pickFront(contracts, todayBRT) {
 //
 // Montamos a série então: pegamos a lista REAL de contratos do ativo (inclusive
 // os vencidos, via includeExpired), baixamos o histórico de cada um e, para cada
-// dia, ficamos com a barra do contrato que era o VIGENTE naquela data. É assim
-// que uma série contínua se compõe.
+// dia, ficamos com a barra do contrato onde o mercado estava naquela data. É
+// assim que uma série contínua se compõe.
 //
-// A lista traz `lastTradeDate` — o último pregão real de cada contrato —, então
-// o corte entre um contrato e o seguinte é exato, sem aproximação de calendário.
+// A lista traz `lastTradeDate` — o último pregão real de cada contrato —, que
+// delimita até onde cada um pode contribuir. Dentro desse limite, quem decide o
+// dia é o VOLUME (ver a regra de escolha lá embaixo), não o calendário.
 //
 // ALCANCE: o /historical serve uma janela MÓVEL DE ~1 ANO. Medido em produção:
 // contratos com vidas bem diferentes (WINQ25, WINV25, WINZ25, WING26) começam
@@ -210,7 +211,9 @@ export async function fetchWinEmendado(redis, mesesAtras = 30) {
 
   const hist = await Promise.allSettled(contratos.map(c => fetchContratoBars(c.symbol, redis, (c.ultimo || c.exp) < hojeISO)));
 
-  const porDia = new Map(); // data -> { bar, exp do contrato escolhido }
+  // Candidatos de cada dia: todo contrato que negociou naquele dia sem ter
+  // vencido ainda. A escolha vem depois.
+  const cand = new Map();
   const usados = [];
   contratos.forEach((c, i) => {
     const bars = hist[i].status === "fulfilled" ? hist[i].value : [];
@@ -219,14 +222,32 @@ export async function fetchWinEmendado(redis, mesesAtras = 30) {
     const fim = c.ultimo || c.exp;                 // último pregão real do contrato
     for (const b of bars) {
       if (b.date > fim) continue;
-      const cur = porDia.get(b.date);
-      if (!cur || c.exp < cur.exp) porDia.set(b.date, { bar: b, exp: c.exp }); // vence o vencimento mais próximo
+      let lista = cand.get(b.date);
+      if (!lista) cand.set(b.date, lista = []);
+      lista.push({ exp: c.exp, symbol: c.symbol, bar: b });
     }
   });
 
-  const bars = [...porDia.keys()].sort().map(d => porDia.get(d).bar);
+  // ESCOLHA DO DIA — rolagem por VOLUME, entre os dois vencimentos mais
+  // próximos: fica com o de maior volume. A rolagem real não acontece na data do
+  // vencimento, e sim quando a liquidez migra, alguns dias antes; até lá o
+  // contrato que vence já está esvaziando e a amplitude dele subestima o
+  // mercado. Medido na série: em 12/08/2025, penúltima sessão do WINQ25, a
+  // amplitude do mini índice saiu MENOR que a do Ibovespa à vista (razão 0,87),
+  // o que é estruturalmente impossível num pregão normal — o futuro negocia mais
+  // horas. Limitar aos dois vencimentos mais próximos impede que um negócio
+  // isolado num contrato distante roube o dia.
+  // Sem volume nos dois lados, cai na regra de calendário (vencimento mais próximo).
+  const bars = [], rolagens = [];
+  for (const d of [...cand.keys()].sort()) {
+    const [a, b] = cand.get(d).sort((x, y) => x.exp.localeCompare(y.exp));
+    let esc = a;
+    if (b && a.bar.volume != null && b.bar.volume != null && b.bar.volume > a.bar.volume) esc = b;
+    bars.push(esc.bar);
+    if (!rolagens.length || rolagens[rolagens.length - 1].symbol !== esc.symbol) rolagens.push({ date: d, symbol: esc.symbol });
+  }
   if (!bars.length) throw new Error("nenhum contrato WIN com histórico");
-  return { bars, contratos: usados, fonte };
+  return { bars, contratos: usados, fonte, rolagens };
 }
 
 export async function fetchFuture(asset) {
@@ -319,7 +340,7 @@ export default async function handler(req, res) {
       const e = await fetchWinEmendado(redis, meses);
       out.emenda = {
         fonte: e.fonte, pregoes: e.bars.length, de: e.bars[0].date, ate: e.bars[e.bars.length - 1].date,
-        contratosUsados: e.contratos,
+        contratosUsados: e.contratos, rolagens: e.rolagens,
         amostra: e.bars.slice(-3).map(b => ({ date: b.date, amplitude: +(b.high - b.low).toFixed(1) })),
       };
     } catch (e) { out.emenda = { erro: String((e && e.message) || e) }; }
