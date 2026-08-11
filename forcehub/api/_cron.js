@@ -11,6 +11,7 @@
 // sua trava por escopo — então cron e navegação cooperam (nada roda em dobro).
 import { runGatilho } from "./_gatilho";
 import { runOptionMarks, runOwnAutoClose } from "./_options";
+import { coletarAmplitude } from "./_estudos";
 import { getUsers } from "./_auth";
 
 const CART_KEY = "forcehub:carteira";
@@ -21,6 +22,12 @@ const asArr = (d) => Array.isArray(d) ? d : (Array.isArray(d && d.posicoes) ? d.
 export async function cronSweep(redis) {
   const out = { recs: false, users: 0, pos: 0, own: 0, errors: [] };
   if (!redis) return out;
+
+  // 0) Estudos: acrescenta o pregão do dia à série histórica de amplitude
+  // (WIN x IBOV). É o que faz a série crescer atravessando as rolagens de
+  // contrato — ver o cabeçalho de _estudos.js.
+  try { out.estudos = await coletarAmplitude(redis, { force: true }); }
+  catch (e) { out.errors.push("estudos:" + (e && e.message || e)); }
 
   // 1) Recomendações compartilhadas (carteira do analista).
   try {

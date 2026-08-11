@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Dots, Spinner, Loading, Icon, confirmDialog, ConfirmHost } from "./ui";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Section, Dots, Spinner, Loading, Icon, confirmDialog, ConfirmHost } from "./ui";
 
 // ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
 // Papéis: superadmin (irrestrito e imutável) · moderator (tudo, exceto alterar o super admin) · client.
@@ -14,8 +14,8 @@ const CAP_LABELS = {
   trades: "Diário de Trades + Dashboard",
   portfolio: "Minha Carteira (ações e opções)",
 };
-const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio"];
-const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio"];
+const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos"];
+const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio", "estudos"];
 const ROLE_LABEL = { superadmin: "Super admin", moderator: "Moderador", client: "Cliente" };
 
 function can(session, cap) {
@@ -203,6 +203,7 @@ const NAV = [
   { key: "panorama",    icon: "panorama",    label: "Panorama",    title: "Panorama de Mercado",   cap: "panorama" },
   { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada",  cap: "carteira" },
   { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro",         cap: "conselheiro" },
+  { key: "estudos",     icon: "estudos",     label: "Estudos",     title: "Estudos de Mercado",    cap: "estudos" },
   { key: "trades",      icon: "journal",     label: "Meus Trades", title: "Diário de Trades",      cap: "trades" },
   { key: "dashboard",   icon: "dashboard",   label: "Dashboard",   title: "Dashboard de Performance", cap: "trades" },
   { key: "turma",       icon: "cohort",      label: "Turma",       title: "Painel da Turma",       cap: "cohort" },
@@ -4054,6 +4055,293 @@ function TurmaScreen({ session }) {
   );
 }
 
+// ─── Estudos ──────────────────────────────────────────────────────────────────
+// Página de estudos de mercado, organizada em seções expansíveis (cada estudo é
+// uma seção; o conteúdo só é montado/buscado quando o usuário abre).
+//
+// Estudo 1 — Amplitude diária: Mini Índice (WIN) x Ibovespa.
+// A amplitude é (máxima − mínima) do dia. Ver as duas séries no mesmo eixo
+// mostra (a) quanto o futuro se move a mais que o índice à vista — ele tem
+// sessão mais longa e carrega o gap de overnight — e (b) se as duas andam
+// juntas. A série é acumulada no servidor dia a dia (ver api/_estudos.js).
+
+// Correlação de Pearson entre duas séries de mesmo tamanho (−1 a +1).
+function pearson(xs, ys) {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 3) return null;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { const a = xs[i] - mx, b = ys[i] - my; sxy += a * b; sxx += a * a; syy += b * b; }
+  if (sxx <= 0 || syy <= 0) return null;
+  return sxy / Math.sqrt(sxx * syy);
+}
+
+const SERIES = [
+  { key: "win",  label: "Mini Índice (WIN)", color: T.s1 },
+  { key: "ibov", label: "Ibovespa",          color: T.s2 },
+];
+const dmyCurto = (iso) => { const p = String(iso).split("-"); return p.length === 3 ? `${p[2]}/${p[1]}` : iso; };
+// Arredonda um passo de eixo para 1/2/2,5/5/10 x potência de 10 (marcas legíveis).
+function passoRedondo(bruto) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(bruto, 1e-6))));
+  const r = bruto / p;
+  return (r <= 1 ? 1 : r <= 2 ? 2 : r <= 2.5 ? 2.5 : r <= 5 ? 5 : 10) * p;
+}
+const fmtAmp = (v, modo) => v == null ? "—" : (modo === "pct" ? v.toFixed(2) + "%" : Math.round(v).toLocaleString("pt-BR") + " pts");
+
+// Gráfico de linhas: duas séries, MESMA unidade e MESMO eixo (nunca dois eixos —
+// escalas diferentes num só gráfico enganam a leitura). Cruz de referência com
+// tooltip ao passar o mouse; rótulos diretos no fim de cada linha, para que a
+// identidade não dependa só da cor.
+function AmplitudeChart({ pontos, modo }) {
+  const [hover, setHover] = useState(null);
+  const boxRef = useRef(null);
+  const n = pontos.length;
+  const W = 1000, H = 300, padL = 56, padR = 104, padT = 18, padB = 32;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  // Eixo Y: começa no zero (amplitude é magnitude) e sobe em passos "redondos" —
+  // dividir o máximo por 4 daria marcas ilegíveis (792, 1.584, 2.375...).
+  const bruto = Math.max(...pontos.flatMap(p => [p.win, p.ibov]), 0) || 1;
+  const passo = passoRedondo(bruto / 4);
+  const maxV = Math.max(Math.ceil(bruto / passo) * passo, passo);
+  const ticksY = Array.from({ length: Math.round(maxV / passo) + 1 }, (_, i) => i * passo);
+
+  const x = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const y = (v) => padT + (1 - v / maxV) * plotH;
+  const pathOf = (k) => pontos.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(p[k]).toFixed(1)).join(" ");
+
+  // Rótulos no fim das linhas: quando as duas terminam em níveis próximos, os
+  // textos se sobrepõem — afasta-os o mínimo necessário (o ponto fica no lugar).
+  const yFim = { win: y(pontos[n - 1].win), ibov: y(pontos[n - 1].ibov) };
+  const dif = yFim.win - yFim.ibov, MIN_SEP = 13;
+  if (Math.abs(dif) < MIN_SEP) {
+    const empurra = (MIN_SEP - Math.abs(dif)) / 2, sinal = dif >= 0 ? 1 : -1;
+    yFim.win += sinal * empurra; yFim.ibov -= sinal * empurra;
+  }
+  // Eixo X: no máximo 7 datas, sem sobrepor.
+  const stepX = Math.max(1, Math.ceil(n / 7));
+  const ticksX = pontos.map((p, i) => ({ p, i })).filter(({ i }) => i % stepX === 0 || i === n - 1);
+
+  const onMove = (e) => {
+    const r = boxRef.current && boxRef.current.getBoundingClientRect();
+    if (!r || !r.width) return;
+    const vx = ((e.clientX - r.left) / r.width) * W;          // px da tela -> unidades do viewBox
+    const i = Math.round(((vx - padL) / plotW) * (n - 1));
+    setHover(Math.max(0, Math.min(n - 1, i)));
+  };
+  const h = hover != null ? pontos[hover] : null;
+
+  return (
+    <div ref={boxRef} style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", overflow: "visible" }} role="img"
+        aria-label={`Amplitude diária do mini índice e do Ibovespa em ${modo === "pct" ? "porcentagem" : "pontos"}`}>
+        {ticksY.map((v, i) => (
+          <g key={i}>
+            <line x1={padL} y1={y(v)} x2={padL + plotW} y2={y(v)} stroke={T.line} strokeWidth="1" opacity={i === 0 ? 0.9 : 0.45} />
+            <text x={padL - 10} y={y(v) + 4} textAnchor="end" fontSize="12" fill={T.dim} fontFamily={T.mono}>
+              {modo === "pct" ? v.toFixed(1) : Math.round(v).toLocaleString("pt-BR")}
+            </text>
+          </g>
+        ))}
+        {ticksX.map(({ p, i }) => (
+          <text key={i} x={x(i)} y={H - 10} textAnchor="middle" fontSize="12" fill={T.dim} fontFamily={T.mono}>{dmyCurto(p.date)}</text>
+        ))}
+
+        {SERIES.map(s => <path key={s.key} d={pathOf(s.key)} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+
+        {/* Rótulo direto no fim de cada linha (identidade sem depender da cor) */}
+        {SERIES.map(s => {
+          const last = pontos[n - 1];
+          return (
+            <g key={s.key}>
+              <circle cx={x(n - 1)} cy={y(last[s.key])} r="3.5" fill={s.color} stroke={T.panel} strokeWidth="2" />
+              <text x={x(n - 1) + 10} y={yFim[s.key] + 4} fontSize="12" fill={T.mut} fontFamily={T.sans}>
+                {s.key === "win" ? "WIN" : "IBOV"}
+              </text>
+            </g>
+          );
+        })}
+
+        {h && (
+          <g pointerEvents="none">
+            <line x1={x(hover)} y1={padT} x2={x(hover)} y2={padT + plotH} stroke={T.mut} strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
+            {SERIES.map(s => <circle key={s.key} cx={x(hover)} cy={y(h[s.key])} r="5" fill={s.color} stroke={T.panel} strokeWidth="2" />)}
+          </g>
+        )}
+      </svg>
+
+      {h && (
+        <div style={{
+          position: "absolute", top: 0, left: `${(x(hover) / W) * 100}%`,
+          transform: `translateX(${hover > n / 2 ? "calc(-100% - 12px)" : "12px"})`,
+          background: T.inset, border: "1px solid " + T.line, borderRadius: 9, padding: "9px 12px",
+          pointerEvents: "none", minWidth: 168, boxShadow: "0 8px 22px rgba(0,0,0,.55)",
+        }}>
+          <div style={{ fontSize: 11.5, color: T.dim, marginBottom: 6, fontFamily: T.mono }}>{dmyCurto(h.date)}/{String(h.date).slice(0, 4)}</div>
+          {SERIES.map(s => (
+            <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, marginTop: 3 }}>
+              <span style={{ width: 9, height: 3, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+              <span style={{ color: T.mut, flex: 1 }}>{s.key === "win" ? "WIN" : "IBOV"}</span>
+              <span style={{ color: T.text, fontFamily: T.mono, fontWeight: 600 }}>{fmtAmp(h[s.key], modo)}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 7, fontSize: 11.5, marginTop: 6, paddingTop: 6, borderTop: "1px solid " + T.line, color: T.dim }}>
+            <span style={{ flex: 1 }}>WIN / IBOV</span>
+            <span style={{ fontFamily: T.mono }}>{h.ibov ? (h.win / h.ibov).toFixed(2) + "x" : "—"}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const JANELAS = [{ k: 30, r: "30 dias" }, { k: 60, r: "60 dias" }, { k: 0, r: "Tudo" }];
+
+function EstudoAmplitude() {
+  const [serie, setSerie] = useState(null);
+  const [erro, setErro] = useState("");
+  const [carregando, setCarregando] = useState(true);
+  const [modo, setModo] = useState("pts");     // "pts" | "pct"
+  const [janela, setJanela] = useState(30);
+  const [tabela, setTabela] = useState(false);
+  const [fontes, setFontes] = useState({});
+
+  const carregar = async (refresh) => {
+    setCarregando(true); setErro("");
+    try {
+      const j = await api.get("/api/market?kind=estudos" + (refresh ? "&refresh=1" : ""));
+      setSerie(Array.isArray(j.serie) ? j.serie : []);
+      setFontes(j.sources || {});
+    } catch (e) { setErro(e.message); }
+    finally { setCarregando(false); }
+  };
+  useEffect(() => { carregar(false); }, []);
+
+  // Amplitude do dia, na unidade escolhida. Em %, precisa do fechamento — dias
+  // sem fechamento em algum dos dois ficam de fora (não dá para comparar).
+  const pontos = useMemo(() => {
+    const base = (serie || []).map(d => {
+      if (modo === "pct") {
+        if (!d.win.c || !d.ibov.c) return null;
+        return { date: d.date, win: ((d.win.h - d.win.l) / d.win.c) * 100, ibov: ((d.ibov.h - d.ibov.l) / d.ibov.c) * 100 };
+      }
+      return { date: d.date, win: d.win.h - d.win.l, ibov: d.ibov.h - d.ibov.l };
+    }).filter(Boolean);
+    return janela ? base.slice(-janela) : base;
+  }, [serie, modo, janela]);
+
+  const stats = useMemo(() => {
+    if (pontos.length < 2) return null;
+    const med = (k) => pontos.reduce((s, p) => s + p[k], 0) / pontos.length;
+    const mw = med("win"), mi = med("ibov");
+    return { mw, mi, razao: mi ? mw / mi : null, r: pearson(pontos.map(p => p.win), pontos.map(p => p.ibov)) };
+  }, [pontos]);
+
+  const Toggle = ({ opcoes, valor, set }) => (
+    <div style={{ display: "flex", background: T.inset, border: "1px solid " + T.line, borderRadius: 8, padding: 2, gap: 2 }}>
+      {opcoes.map(o => (
+        <button key={String(o.k)} className="fh-btn" onClick={() => set(o.k)}
+          style={{ background: valor === o.k ? T.goldSoft : "transparent", color: valor === o.k ? T.gold : T.mut, border: "1px solid " + (valor === o.k ? T.lineGold : "transparent"), padding: "5px 11px", fontSize: 12.5 }}>
+          {o.r}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (carregando && !serie) return <Loading label="Carregando a série histórica..." />;
+  if (erro) return <Banner tone="red">{erro} <button className="fh-btn" onClick={() => carregar(false)} style={{ background: "transparent", border: "none", color: T.gold, textDecoration: "underline", padding: 0, marginLeft: 6 }}>tentar de novo</button></Banner>;
+
+  if (!pontos.length) {
+    return (
+      <EmptyState icon="📈" title="A série ainda está sendo formada"
+        desc="Os pregões são coletados e guardados automaticamente todo dia. Se acabou de publicar, aguarde a primeira coleta ou force uma agora.">
+        <Button variant="gold" size="sm" onClick={() => carregar(true)}>Coletar agora</Button>
+      </EmptyState>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Filtros numa linha só, acima do gráfico */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <Toggle opcoes={[{ k: "pts", r: "Pontos" }, { k: "pct", r: "%" }]} valor={modo} set={setModo} />
+        <Toggle opcoes={JANELAS} valor={janela} set={setJanela} />
+        <div style={{ flex: 1 }} />
+        <Button variant="ghost" size="sm" onClick={() => setTabela(t => !t)}>{tabela ? "Ver gráfico" : "Ver tabela"}</Button>
+        <Button variant="ghost" size="sm" onClick={() => carregar(true)} disabled={carregando}>{carregando ? "Atualizando..." : "Atualizar"}</Button>
+      </div>
+
+      {/* Legenda: sempre presente com duas séries */}
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+        {SERIES.map(s => (
+          <span key={s.key} style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: T.mut }}>
+            <span style={{ width: 16, height: 3, borderRadius: 2, background: s.color }} />{s.label}
+          </span>
+        ))}
+      </div>
+
+      {tabela ? (
+        <div className="fh-scroll-x">
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>{["DIA", "WIN", "IBOV", "WIN/IBOV"].map((th, i) => (
+                <th key={i} style={{ textAlign: i ? "right" : "left", padding: "8px 10px", fontSize: 10.5, letterSpacing: 0.4, color: T.dim, borderBottom: "1px solid " + T.line, fontWeight: 600 }}>{th}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {pontos.slice().reverse().map(p => (
+                <tr key={p.date}>
+                  <td style={{ padding: "7px 10px", color: T.mut, fontFamily: T.mono, borderBottom: "1px solid " + T.line }}>{dmyCurto(p.date)}/{String(p.date).slice(0, 4)}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right", color: T.text, fontFamily: T.mono, borderBottom: "1px solid " + T.line }}>{fmtAmp(p.win, modo)}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right", color: T.text, fontFamily: T.mono, borderBottom: "1px solid " + T.line }}>{fmtAmp(p.ibov, modo)}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right", color: T.dim, fontFamily: T.mono, borderBottom: "1px solid " + T.line }}>{p.ibov ? (p.win / p.ibov).toFixed(2) + "x" : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <AmplitudeChart pontos={pontos} modo={modo} />
+      )}
+
+      {stats && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+          <Stat label="Amplitude média WIN" value={fmtAmp(stats.mw, modo)} />
+          <Stat label="Amplitude média IBOV" value={fmtAmp(stats.mi, modo)} />
+          <Stat label="WIN / IBOV" value={stats.razao ? stats.razao.toFixed(2) + "x" : "—"} tone={stats.razao > 1 ? "gold" : "text"} />
+          <Stat label="Correlação" value={stats.r == null ? "—" : stats.r.toFixed(2)} tone={stats.r >= 0.7 ? "green" : stats.r >= 0.4 ? "gold" : "mut"} />
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: T.dim, lineHeight: 1.65 }}>
+        Amplitude = máxima − mínima do dia{modo === "pct" ? ", dividida pelo fechamento" : ""}. {pontos.length} pregões.
+        {fontes.win ? " Fonte do índice: " + fontes.win + "." : ""} A razão acima de 1,0x indica que o mini índice
+        oscilou mais que o Ibovespa no período — ele negocia por mais horas e absorve o gap de abertura.
+        A correlação vai de −1 a +1: perto de +1, os dias agitados de um são os dias agitados do outro.
+      </div>
+    </div>
+  );
+}
+
+function EstudosScreen() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Disclaimer title="Conteúdo educacional">
+        Os estudos abaixo são material de apoio ao aprendizado e não constituem recomendação de investimento.
+        Dados de mercado com atraso, sujeitos a falhas da fonte.
+      </Disclaimer>
+      <Section
+        title="Amplitude diária: Mini Índice x Ibovespa"
+        desc="Quanto cada um percorreu por dia (máxima − mínima) e o quanto andam juntos."
+        icon="📊" defaultOpen>
+        <EstudoAmplitude />
+      </Section>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [active, setActive] = useState("panorama");
@@ -4109,6 +4397,7 @@ export default function App() {
         {current === "panorama" && <PanoramaScreen session={session} />}
         {current === "carteira" && <CarteiraScreen session={session} canWrite={can(session, "carteira_write")} canPortfolio={can(session, "portfolio")} />}
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} account={account} setAccount={setAccount} />}
+        {current === "estudos" && <EstudosScreen />}
         {current === "trades" && <TradesScreen session={session} account={account} setAccount={setAccount} />}
         {current === "dashboard" && <DashboardScreen session={session} account={account} setAccount={setAccount} />}
         {current === "turma" && <TurmaScreen session={session} />}

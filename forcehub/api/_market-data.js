@@ -49,7 +49,7 @@ export function findBarsArray(obj, depth = 0) {
   return null;
 }
 
-function mapBars(bars, scale = 1) {
+export function mapBars(bars, scale = 1) {
   return (bars || [])
     .map(b => ({
       date: toISODate(b.date),
@@ -66,10 +66,10 @@ function mapBars(bars, scale = 1) {
 // ── Brapi: Ibovespa (^BVSP) ──
 // O /quote do índice às vezes devolve historicalDataPrice vazio; usa getJson
 // (com retry) e tenta um range maior antes de desistir.
-async function fetchIbovBars(numDays) {
+export async function fetchIbovBarsFor(ranges) {
   if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");
   const tok = `&token=${BRAPI_TOKEN}`;
-  for (const range of (numDays <= 5 ? ["5d", "1mo"] : ["1mo", "3mo"])) {
+  for (const range of ranges) {
     try {
       const j = await getJson(`https://brapi.dev/api/quote/%5EBVSP?range=${range}&interval=1d${tok}`);
       const q = j?.results?.[0];
@@ -78,6 +78,10 @@ async function fetchIbovBars(numDays) {
     } catch (_) { /* tenta o próximo range */ }
   }
   throw new Error("IBOV sem dados de histórico");
+}
+
+async function fetchIbovBars(numDays) {
+  return fetchIbovBarsFor(numDays <= 5 ? ["5d", "1mo"] : ["1mo", "3mo"]);
 }
 
 // ── Brapi: futuros (sempre com o token PRO) ──
@@ -95,7 +99,7 @@ export function pickFront(contracts, todayBRT) {
   return dated.slice().sort((a, b) => b.expirationDate.localeCompare(a.expirationDate))[0];
 }
 
-async function fetchFuture(asset) {
+export async function fetchFuture(asset) {
   // Sempre com o token PRO: sem ele, nem tenta o sandbox grátis (limites e
   // instabilidade) — cai direto no fallback do chamador (Ibov/USDBRL proxy).
   if (!BRAPI_TOKEN) throw new Error("BRAPI_TOKEN ausente");

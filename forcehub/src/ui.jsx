@@ -21,6 +21,13 @@ export const T = {
   purple: "#c4b5fd",
   sans: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif",
   mono: "'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace",
+  // Séries de gráfico (ordem fixa: série 1, série 2, ...). Tons próprios, mais
+  // fechados que o ouro/azul da interface: sobre o fundo escuro dos painéis eles
+  // ficam dentro da faixa de luminosidade legível e mantêm separação alta para
+  // daltonismo (ΔE ~29 em protanopia). Não reaproveitar T.gold/T.blue aqui: são
+  // claros demais para traço fino e "vibram" no preto.
+  s1: "#bd880c",
+  s2: "#7078ea",
 };
 
 const TONES = { gold: T.gold, green: T.green, red: T.red, blue: T.blue, mut: T.mut, purple: T.purple, text: T.text };
@@ -215,6 +222,33 @@ export function Modal({ title, onClose, children, width = 560 }) {
   );
 }
 
+// Seção expansível (acordeão). Base das páginas que crescem por blocos, como
+// Estudos: o cabeçalho fica sempre visível e o conteúdo só monta quando aberto
+// (evita buscar dados de estudos que ninguém abriu).
+export function Section({ title, desc, icon, defaultOpen = false, right, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card style={{ overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, background: T.panel2, borderBottom: open ? "1px solid " + T.line : "none" }}>
+        <button
+          className="fh-btn" onClick={() => setOpen(o => !o)} aria-expanded={open}
+          style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", borderRadius: 0, padding: "15px 18px", display: "flex", alignItems: "center", gap: 12, textAlign: "left", justifyContent: "flex-start" }}>
+          <span style={{ color: open ? T.gold : T.dim, transform: open ? "none" : "rotate(-90deg)", transition: "transform .18s, color .18s", display: "flex" }}>
+            <Icon name="chevron" size={17} />
+          </span>
+          {icon && <span style={{ fontSize: 17, lineHeight: 1, flexShrink: 0 }}>{icon}</span>}
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 15, fontWeight: 700, color: T.text }}>{title}</span>
+            {desc && <span style={{ display: "block", fontSize: 12.5, color: T.dim, marginTop: 3, fontWeight: 400 }}>{desc}</span>}
+          </span>
+        </button>
+        {right && <div style={{ padding: "0 18px 0 0", flexShrink: 0 }}>{right}</div>}
+      </div>
+      {open && <div style={{ padding: 18, animation: "fh-fade .18s ease" }}>{children}</div>}
+    </Card>
+  );
+}
+
 // ─── Confirmação (substitui window.confirm por um modal do próprio tema) ──────
 // Popups nativos do navegador (confirm/alert/prompt) travam a thread, não dão
 // para estilizar, podem ser bloqueados e quebram em alguns webviews/mobile.
@@ -304,6 +338,8 @@ const ICON_PATHS = {
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>,
   userplus: <><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0" /><line x1="18.5" y1="8" x2="18.5" y2="14" /><line x1="15.5" y1="11" x2="21.5" y2="11" /></>,
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>,
+  estudos: <><path d="M3 17.5l4.5-6 3.5 3 4-6.5 6 4.5" /><path d="M3 10l4.5 3 3.5-6 4 5 6-8" opacity=".55" /></>,
+  chevron: <polyline points="6 9 12 15 18 9" />,
 };
 
 export function Icon({ name, size = 18, color, style }) {
