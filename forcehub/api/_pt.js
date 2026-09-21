@@ -34,8 +34,8 @@ const MAX_TAGS = 120;
 const MAX_SNIPPETS = 8;
 
 export const STATUS_CICLO = new Set(["ativo", "concluido", "pausado"]);
-export const CATEGORIAS_TAG = new Set(["decisao", "execucao", "gestao", "emocional"]);
-export const POLARIDADES = new Set(["erro", "acerto"]);
+const CATEGORIAS_TAG = new Set(["decisao", "execucao", "gestao", "emocional"]);
+const POLARIDADES = new Set(["erro", "acerto"]);
 
 export const hojeISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
 const isISO = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));

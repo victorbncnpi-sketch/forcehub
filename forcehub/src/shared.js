@@ -65,7 +65,13 @@ export function parseProfitCsv(text, valorR) {
   let hi = -1;
   for (let i = 0; i < lines.length && i < 50; i++) {
     const c = lines[i].split(";");
-    if (c.length >= 8 && deburr(c[0]) === "ativo") { hi = i; break; }
+    // >= 4 colunas, não 8: o layout do Profit é configurável e um aluno que
+    // exporta só o essencial (Ativo, Abertura, Lado, Qtd, Res. Operação) tinha
+    // o arquivo recusado com "cabeçalho não reconhecido". O preâmbulo do Profit
+    // tem 1-2 colunas e nenhuma linha dele começa com "Ativo", então baixar o
+    // piso não cria falso positivo — e se a coluna de R$ faltar, o erro logo
+    // abaixo é específico em vez de genérico.
+    if (c.length >= 4 && deburr(c[0]) === "ativo") { hi = i; break; }
   }
   if (hi < 0) return { error: "Cabeçalho não reconhecido — confirme que é o relatório de Operações exportado do Profit (.csv)." };
 

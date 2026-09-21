@@ -47,6 +47,11 @@ function sanitizeTrades(arr) {
     const o = {
       id: isNum(t.id) ? t.id : undefined,
       data,
+      // Hora e quantidade vêm do CSV do Profit. O Diário em si não as usa, mas
+      // o Personal Trader puxa operações daqui — e sem elas as regras de
+      // "fora do horário" e "contratos acima do plano" ficam cegas.
+      hora: /^\d{2}:\d{2}/.test(String(t.hora || "")) ? String(t.hora).slice(0, 5) : undefined,
+      qtd: isNum(t.qtd) && t.qtd > 0 ? t.qtd : undefined,
       ativo: cleanStr(t.ativo, 24) || null,
       direcao: DIRECOES.has(t.direcao) ? t.direcao : null,
       r: isNum(t.r) ? t.r : null,

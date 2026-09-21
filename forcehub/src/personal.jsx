@@ -442,9 +442,14 @@ function EnviarDia({ plano, jornada, onEnviado }) {
       if (!doDia.length) { setMsg({ tom: "gold", txt: `Nenhuma operação com resultado em R$ no seu Diário em ${dmy(data)}.` }); return; }
       setOps(doDia.map((t, i) => ({
         id: "d" + i, hora: t.hora || "", ativo: t.ativo, direcao: t.direcao,
-        contratos: plano ? plano.contratos : 1, resultado: t.fin, setup: t.setup || "",
+        contratos: t.qtd || (plano ? plano.contratos : 1), resultado: t.fin, setup: t.setup || "",
       })));
-      setMsg({ tom: "green", txt: `${doDia.length} operação(ões) trazidas do Diário.` });
+      // Operação antiga do Diário pode não ter horário — e sem ele a regra de
+      // horário permitido fica cega. Melhor avisar do que passar batido.
+      const semHora = doDia.filter(t => !t.hora).length;
+      setMsg(semHora
+        ? { tom: "gold", txt: `${doDia.length} operação(ões) trazidas do Diário — ${semHora} sem horário. Preencha a hora para o gerenciamento conferir a faixa permitida.` }
+        : { tom: "green", txt: `${doDia.length} operação(ões) trazidas do Diário.` });
     } catch (e) { setMsg({ tom: "red", txt: e.message }); }
   };
 

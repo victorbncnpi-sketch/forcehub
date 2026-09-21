@@ -90,6 +90,26 @@ conectar ao projeto, as variáveis `UPSTASH_REDIS_REST_URL` e
 > indisponibilidade — o restante da aplicação continua funcionando.
 > Sem `BRAPI_TOKEN`, o Panorama cai para entrada manual.
 
+## Testes
+
+```bash
+npm test
+```
+
+Suíte própria, sem dependências (`tests/`): motor de regras, projeção,
+armazenamento, saneamento de entrada, a matriz de permissões do
+`/api/personal` e o leitor de CSV do Profit. Roda em segundos e não precisa de
+banco nem de rede.
+
+Dois detalhes de como ela roda, em `tests/loader.mjs`:
+
+- A Vercel resolve `import ... from "./_pt"` sem extensão; o `node` da linha de
+  comando não. Um hook de resolução acrescenta o `.js`.
+- `api/_redis.js` e `api/_auth.js` são trocados por dublês em `tests/stubs/`.
+  O dublê de `_auth` **reexporta** as funções de permissão do arquivo real em vez
+  de copiá-las: uma cópia deixaria os testes de permissão verdes mesmo depois de
+  alguém afrouxar a regra em produção.
+
 ## Desenvolvimento local
 
 ```bash

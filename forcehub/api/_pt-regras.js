@@ -29,16 +29,9 @@ const META_ATENCAO = 0.80; // >= 80% do ritmo necessário: amarelo (abaixo: verm
 // combinada, que NEM SEMPRE é quebra de regra (a linha da meta mensal fica
 // vermelha só por estar atrás do ritmo). Quebra de regra é violação, e vive
 // na lista de violações, que é outra coisa.
-export const NIVEIS = ["ok", "atencao", "fora", "neutro"];
+// Níveis: "ok" | "atencao" | "fora" | "neutro" (os rótulos visíveis e as
+// cores vivem em src/personal.jsx — um dicionário só, do lado que exibe).
 
-export const TIPOS_VIOLACAO = {
-  prejuizo_diario: "Prejuízo diário",
-  contratos_acima: "Contratos acima do plano",
-  fora_de_horario: "Fora do horário permitido",
-  sem_stop: "Stop não respeitado",
-  overtrading: "Overtrading",
-  setup_nao_autorizado: "Setup não autorizado",
-};
 
 const num = (v) => (typeof v === "number" && isFinite(v)) ? v : null;
 const pos = (v) => { const n = num(v); return n != null && n > 0 ? n : null; };
@@ -342,7 +335,7 @@ export function quadroGerenciamento(plano, dia, ciclo) {
 // simplificação declarada: aplica o teto sobre a média, não sobre cada dia.
 const clamp = (v, min, max) => Math.min(max == null ? v : max, Math.max(min == null ? v : min, v));
 
-export function expectativaEmR(winRate, payoff) {
+function expectativaEmR(winRate, payoff) {
   if (winRate == null || payoff == null) return null;
   return round2(winRate * payoff - (1 - winRate));
 }
