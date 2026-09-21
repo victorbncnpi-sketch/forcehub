@@ -193,7 +193,7 @@ const NAV = [
   { key: "carteira",    icon: "carteira",    label: "Carteira",    title: "Carteira Recomendada",  cap: "carteira" },
   { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro",         cap: "conselheiro" },
   { key: "estudos",     icon: "estudos",     label: "Estudos",     title: "Estudos de Mercado",    cap: "estudos" },
-  { key: "personal",    icon: "personal",    label: "Personal",    title: "Personal Trader",       cap: "personal" },
+  { key: "personal",    icon: "personal",    label: "Personal Trader", title: "Personal Trader",   cap: "personal" },
   { key: "trades",      icon: "journal",     label: "Meus Trades", title: "Diário de Trades",      cap: "trades" },
   { key: "dashboard",   icon: "dashboard",   label: "Dashboard",   title: "Dashboard de Performance", cap: "trades" },
   { key: "turma",       icon: "cohort",      label: "Turma",       title: "Painel da Turma",       cap: "cohort" },
