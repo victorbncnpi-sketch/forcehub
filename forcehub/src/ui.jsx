@@ -71,6 +71,9 @@ input, textarea { font-family: inherit; }
 .fh-input:focus { border-color: ${T.gold}; }
 .fh-card { background: ${T.panel}; border: 1px solid ${T.line}; border-radius: 14px; }
 .fh-news-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+/* Tela de análise do Personal Trader: conteúdo + lateral com o Quadro. Abaixo
+   de 1100px a lateral desce, senão o Quadro espreme os três painéis. */
+@media (max-width: 1100px) { .fh-analise { grid-template-columns: 1fr !important; } }
 @media (max-width: 960px) { .fh-news-grid { grid-template-columns: 1fr; } }
 
 @media (max-width: 860px) {
@@ -340,6 +343,8 @@ const ICON_PATHS = {
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>,
   estudos: <><path d="M3 17.5l4.5-6 3.5 3 4-6.5 6 4.5" /><path d="M3 10l4.5 3 3.5-6 4 5 6-8" opacity=".55" /></>,
   chevron: <polyline points="6 9 12 15 18 9" />,
+  personal: <><circle cx="8.5" cy="7" r="3" /><path d="M3 19a5.5 5.5 0 0 1 11 0" /><polyline points="14 12 17 9 19 11 22 6.5" /></>,
+  alert: <><path d="M12 4l9 16H3z" /><line x1="12" y1="10" x2="12" y2="14" /><circle cx="12" cy="17" r=".6" /></>,
 };
 
 export function Icon({ name, size = 18, color, style }) {

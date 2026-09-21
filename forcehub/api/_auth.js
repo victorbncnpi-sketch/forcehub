@@ -15,7 +15,10 @@ export const ROLES = ["client", "moderator", "superadmin"];
 
 // Permissões granulares por página (controlam clientes). Staff (moderador/super
 // admin) tem todas implicitamente.
-export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos"];
+// "personal" fica FORA de DEFAULT_CLIENT_PERMS de propósito: o Personal
+// Trader é um produto à parte, e o acesso é concedido junto com a matrícula
+// no ciclo (ver garantirPermissao em api/_pt.js).
+export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos", "personal"];
 export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio", "estudos"];
 
 // Cadastro inicial — usado apenas se o banco ainda não tiver usuários.

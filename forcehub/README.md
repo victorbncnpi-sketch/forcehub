@@ -22,6 +22,12 @@ Brapi e persistência/autenticação via Upstash Redis, todos no plano grátis).
   drawdown, run-up, sequências, curva de capital (R e R$), resultado por mês e
   quebras por ativo/direção/dia da semana — com análise gerada por IA. Permite
   incluir ou não as posições da Carteira no cálculo. Filtros por período/ativo.
+- **Estudos de Mercado** — seções expansíveis com estudos próprios. O primeiro
+  compara a **amplitude diária do Mini Índice (WIN) x Ibovespa** (em pontos ou
+  %), com correlação e razão entre as duas. A série do WIN é a "emendada" —
+  montada a partir da lista real de contratos da Brapi, dia a dia com o contrato
+  vigente na época — e é acumulada no Redis, então cresce indefinidamente.
+- **Personal Trader** (mentoria de 30 dias operados) — ver seção própria abaixo.
 - **Painel da Turma** (só super admin) — visão consolidada do mentor: médias da
   turma (acerto, payoff, SQN, expectativa), curva de capital média, **ranking**
   dos alunos e um **Painel de Atenção** (drawdown forte, sequência de loss,
@@ -40,11 +46,19 @@ Brapi e persistência/autenticação via Upstash Redis, todos no plano grátis).
 | Conselheiro | `api/conselheiro.js` | Persiste perfil + diário por usuário (cross-device) |
 | Diário de Trades | `api/trades.js` | Operações **por usuário** (R-múltiplo + R$, com `valorR`). O Dashboard agrega isto com o diário do Conselheiro e, opcionalmente, as posições da Carteira |
 | Painel da Turma | `api/cohort.js` | **Só super admin**: lê os dados de todos os clientes e devolve ao front, que agrega a turma (médias, ranking, alertas) e abre o dashboard de cada aluno |
+| Estudos | `api/_estudos.js` · `api/_market-data.js` | Série histórica de amplitude (WIN x IBOV), acumulada no Redis pela cron |
+| Personal Trader | `api/personal.js` · `api/_pt.js` · `api/_pt-regras.js` · `src/personal.jsx` | Ciclo de 30 dias: Sessão Zero, plano versionado, envios diários, motor de regras, feedback estruturado e relatório final |
 | Banco | `api/_redis.js` | Cliente Upstash Redis compartilhado |
 
 > As cotações são buscadas sob demanda (sem persistência). Login, carteira e
 > Conselheiro usam Upstash Redis — por isso o banco passou a ser **obrigatório**
 > para autenticar (sem ele, o login retorna erro de configuração).
+
+> **Teto de 12 funções serverless (plano Hobby da Vercel).** Só arquivos em
+> `api/` SEM o prefixo `_` viram função; os `_` são helpers e não contam. Hoje
+> são exatamente 12 — no limite. Qualquer endpoint novo tem que entrar como
+> sub-rota de um existente (`?kind=` em `api/market.js`, `?fn=` em
+> `api/users.js` e `api/personal.js`), nunca como arquivo novo sem prefixo.
 
 ## Deploy no Vercel
 
@@ -139,3 +153,59 @@ e o Painel da Turma) e **🗑 Limpar testes** (remove todos eles de uma vez). As
 contas demo (senha `demo2026`) são marcadas com `demoSeed`, então a limpeza
 nunca afeta usuários reais. Lógica em `api/seed-demo.js`.
 
+
+## Personal Trader
+
+Acompanhamento individual de **30 dias operados** (não dias de calendário: o
+contador anda a cada envio). Duas visões no mesmo módulo, escolhidas pelo papel
+de quem entra — aluno ou mentor.
+
+**O ciclo.** A **Sessão Zero** é a reunião em que o mentor levanta a capacidade
+financeira do aluno e define o plano de risco. Dali sai o **Plano v1**, que vira
+o **Quadro de Gerenciamento** — seis parâmetros (pontos alvo, pontos de stop,
+contratos por entrada, ganho diário, prejuízo diário, meta mensal) com as
+colunas *Definido*, *Hoje* e um semáforo. O quadro fica no topo de todas as
+telas do aluno e na lateral da tela de análise do mentor.
+
+Todo dia o aluno **envia o dia** (CSV de Operações do Profit, importação do
+próprio Diário de Trades do hub, ou digitando), escreve um resumo e marca o
+estado emocional. O servidor detecta as **violações** automaticamente e o mentor
+analisa, comentando **operação → tag → comentário → recomendação** — nunca texto
+solto. O aluno confirma a leitura e pode devolver uma pergunta.
+
+**Regras (sem IA), em `api/_pt-regras.js`.** Tudo é função pura e determinística:
+
+- Na Sessão Zero, avisa sobre meta agressiva, payoff < 1, risco acima de 2% do
+  capital e stop diário que não cabe duas operações perdedoras.
+- A cada envio, gera violação de `prejuizo_diario`, `contratos_acima`,
+  `fora_de_horario`, `sem_stop`, `overtrading` e `setup_nao_autorizado`.
+- Alerta o mentor sobre tilt (3 perdas seguidas no dia), métrica fora da faixa
+  por 3 envios, drawdown acima do projetado e 7 dias sem envio.
+
+**Versionamento do plano.** Cada ajuste publica uma nova versão com motivo
+obrigatório. A violação fica amarrada à versão vigente **na data da operação**,
+nunca à atual — afrouxar o stop no dia 20 não absolve o dia 7. Qualquer mudança
+de plano reanalisa os envios afetados no servidor.
+
+**Projeção.** Faixa pessimista / base / otimista, variando **só o acerto**
+(±10 p.p. sobre o alvo do plano): payoff, frequência e risco dependem da
+disciplina do aluno, o acerto depende do mercado. A tela mostra o ritmo e
+decompõe o desvio nas quatro variáveis (acerto, payoff, operações por dia, risco
+médio), trocando uma por vez pelo valor real. Metas de **processo** vêm sempre
+em primeiro plano; o resultado financeiro aparece em segundo e sempre em faixa.
+
+**Privacidade.** O diagnóstico da Sessão Zero (capacidade financeira) e as
+anotações do mentor são removidos no **servidor** de qualquer resposta lida por
+um cliente — inclusive a dele mesmo.
+
+**Acesso.** A permissão `personal` não entra no pacote padrão dos alunos: ela é
+concedida junto com a matrícula, quando o mentor cria o ciclo na Sessão Zero.
+
+**Chaves no Redis.** `forcehub:pt:alunos` (índice), `forcehub:pt:ciclo:<user>`,
+`forcehub:pt:envios:<user>`, `forcehub:pt:img:<user>:<id>` (prints, um por
+chave) e `forcehub:pt:tags` (biblioteca compartilhada de tags e snippets).
+
+**Preparado para IA (fase de copiloto).** Cada envio guarda o conjunto completo
+— envio + plano vigente + violações + tags + comentário por operação + feedback
+geral — e cada tag acumula os snippets mais usados pelo mentor. É o par de
+treino pronto para quando a IA passar a rascunhar o feedback.
