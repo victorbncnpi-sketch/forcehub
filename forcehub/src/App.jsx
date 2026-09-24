@@ -3211,7 +3211,7 @@ function TradesScreen({ session, account = "real", setAccount }) {
   const [vrInput, setVrInput] = useState("");
   const [vrStatus, setVrStatus] = useState(""); // "" | "saving" | "saved"
   const [importErr, setImportErr] = useState("");
-  const [preview, setPreview] = useState(null); // { novos, dupes, invalid, total, sumFin, minD, maxD }
+  const [preview, setPreview] = useState(null); // { novos, dupes, invalid, abertas, total, sumFin, minD, maxD }
   const [loadFailed, setLoadFailed] = useState(false); // falha ao carregar a conta -> bloqueia escrita
   const [reloadKey, setReloadKey] = useState(0);
   const fileRef = useRef(null);
@@ -3359,7 +3359,7 @@ function TradesScreen({ session, account = "real", setAccount }) {
       }
       const sumFin = novos.reduce((s, t) => s + (t.fin || 0), 0);
       const ds = novos.map(t => t.data).sort();
-      setPreview({ novos, dupes, invalid: res.invalid, total: res.trades.length, sumFin, minD: ds[0], maxD: ds[ds.length - 1], resCol: res.resCol });
+      setPreview({ novos, dupes, invalid: res.invalid, abertas: res.abertas || 0, total: res.trades.length, sumFin, minD: ds[0], maxD: ds[ds.length - 1], resCol: res.resCol });
     } catch (err) { setImportErr("Falha ao ler o arquivo: " + err.message); }
   };
   const confirmImport = () => {
@@ -3446,6 +3446,7 @@ function TradesScreen({ session, account = "real", setAccount }) {
               <b style={{ color: signTone(preview.sumFin) }}>{fmtBRL(preview.sumFin)}</b>
             </div>
           )}
+          {preview.abertas > 0 && <div style={{ fontSize: 12, color: T.dim }}>{preview.abertas === 1 ? "1 posição ainda aberta no arquivo ficou" : `${preview.abertas} posições ainda abertas no arquivo ficaram`} de fora — o resultado dela é provisório. Importe de novo depois de zerar e ela entra com o valor final.</div>}
           {preview.resCol && <div style={{ fontSize: 12, color: T.dim }}>Coluna de resultado (R$) detectada: <b style={{ color: T.mut }}>{preview.resCol}</b> — confira se é o valor financeiro, não os pontos.</div>}
           {!valorR && preview.novos.length > 0 && <Banner tone="gold">Defina o <b>valor de 1R</b> acima para que estas operações entrem nas estatísticas do Dashboard (o resultado em R$ já fica registrado).</Banner>}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

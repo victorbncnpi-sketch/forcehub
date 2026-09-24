@@ -58,7 +58,7 @@ export function brDateTime(s) {
 // WING26 -> WIN ; WDOG26 -> WDO ; PETR4 -> PETR4 (corta só o vencimento de futuro).
 export const rootAtivo = (s) => String(s || "").trim().toUpperCase().replace(/[FGHJKMNQUVXZ]\d{2}$/, "") || null;
 
-// Lê o texto já decodificado e devolve { trades, invalid, error }. Cada trade
+// Lê o texto já decodificado e devolve { trades, invalid, abertas, error }. Cada trade
 // guarda `ext` = chave única (contrato+data+hora+resultado) p/ deduplicar.
 export function parseProfitCsv(text, valorR) {
   const lines = String(text || "").split(/\r?\n/);
@@ -68,10 +68,13 @@ export function parseProfitCsv(text, valorR) {
     // >= 4 colunas, não 8: o layout do Profit é configurável e um aluno que
     // exporta só o essencial (Ativo, Abertura, Lado, Qtd, Res. Operação) tinha
     // o arquivo recusado com "cabeçalho não reconhecido". O preâmbulo do Profit
-    // tem 1-2 colunas e nenhuma linha dele começa com "Ativo", então baixar o
-    // piso não cria falso positivo — e se a coluna de R$ faltar, o erro logo
+    // tem 1-2 colunas e nenhuma célula dele é exatamente "Ativo", então baixar
+    // o piso não cria falso positivo — e se a coluna de R$ faltar, o erro logo
     // abaixo é específico em vez de genérico.
-    if (c.length >= 4 && deburr(c[0]) === "ativo") { hi = i; break; }
+    // "Ativo" em QUALQUER coluna, não só na primeira: o Relatório de Performance
+    // abre com "Subconta" (Subconta;Ativo;Abertura;...) e era recusado inteiro.
+    // As demais colunas já são achadas por nome, então a posição não importa.
+    if (c.length >= 4 && c.some(x => deburr(x) === "ativo")) { hi = i; break; }
   }
   if (hi < 0) return { error: "Cabeçalho não reconhecido — confirme que é o relatório de Operações exportado do Profit (.csv)." };
 
@@ -112,8 +115,17 @@ export function parseProfitCsv(text, valorR) {
     return null;
   };
 
+  // Posição em aberto: o Profit lista a operação ainda não zerada com
+  // "Fechamento" vazio (" - ") e o resultado marcado a mercado. Importá-la
+  // gravaria um número provisório — e como o `ext` inclui o resultado, a mesma
+  // operação reimportada depois de fechada entraria de novo, em dobro. Fica de
+  // fora e é contada à parte, para a prévia avisar. Só o marcador "-" do Profit
+  // conta como aberta: célula vazia ou layout sem "Fechamento" seguem como antes
+  // (na dúvida, importar é melhor que sumir com uma operação fechada).
+  const iFech = find(h => h === "fechamento" || h.startsWith("fechamento"));
+
   const trades = [];
-  let invalid = 0;
+  let invalid = 0, abertas = 0;
   for (let i = hi + 1; i < lines.length; i++) {
     if (!lines[i] || !lines[i].trim()) continue;
     const c = lines[i].split(";");
@@ -122,6 +134,7 @@ export function parseProfitCsv(text, valorR) {
     const fin = brNum(c[iRes]);
     const contrato = (c[iAtivo] || "").trim().toUpperCase();
     if (!dt || fin == null || !contrato) { invalid++; continue; }
+    if (iFech >= 0 && /^-+$/.test(String(c[iFech] || "").trim())) { abertas++; continue; }
     trades.push({
       data: dt.data, hora: (dt.hora || "").slice(0, 5), qtd: qtdOf(c),
       ativo: rootAtivo(contrato), direcao: sideOf(c),
@@ -129,5 +142,5 @@ export function parseProfitCsv(text, valorR) {
       ext: `profit:${contrato}:${dt.data} ${dt.hora}:${fin}`,
     });
   }
-  return { trades, invalid, resCol };
+  return { trades, invalid, abertas, resCol };
 }

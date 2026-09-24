@@ -430,7 +430,9 @@ function EnviarDia({ plano, jornada, onEnviado }) {
         id: "c" + i, hora: t.hora || "", ativo: t.ativo, direcao: t.direcao,
         contratos: t.qtd || (plano ? plano.contratos : 1), resultado: t.fin, setup: "", ext: t.ext,
       })));
-      setMsg({ tom: "green", txt: `${doDia.length} operação(ões) lidas de ${dmy(data)}.` });
+      setMsg(res.abertas
+        ? { tom: "gold", txt: `${doDia.length} operação(ões) lidas de ${dmy(data)}. ${res.abertas} posição(ões) ainda aberta(s) no arquivo ficaram de fora — se for deste dia, exporte de novo depois de zerar.` }
+        : { tom: "green", txt: `${doDia.length} operação(ões) lidas de ${dmy(data)}.` });
     } catch (err) { setMsg({ tom: "red", txt: "Falha ao ler o arquivo: " + err.message }); }
   };
 
