@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { api, resizeImage, parseProfitCsv } from "./shared";
+import { api, resizeImage, parseProfitCsv, ehMes, rotuloMes, mesesDe } from "./shared";
 import PersonalScreen from "./personal";
-import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Section, Dots, Spinner, Loading, Icon, confirmDialog, ConfirmHost } from "./ui";
+import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Section, Dots, Spinner, Loading, Icon, confirmDialog, ConfirmHost, MesSelect } from "./ui";
 
 // ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
 // Papéis: superadmin (irrestrito e imutável) · moderator (tudo, exceto alterar o super admin) · client.
@@ -3587,8 +3587,13 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
   const manualEv = cartOn ? trades : (trades || []).filter(t => !isCartRow(t));
   const allEvents = buildEvents({ manual: manualEv, valorR, diario, posicoes: cartOn ? posicoes : [], includeCarteira: cartOn });
   const ativosDisp = Array.from(new Set(allEvents.map(e => e.ativo).filter(Boolean))).sort();
+  // Meses de todas as operações (não só das do ativo filtrado): trocar de ativo
+  // não deve encolher o seletor. t = 0 é data ilegível, fica fora.
+  const mesesDisp = mesesDe(allEvents.filter(e => e.t).map(e => e.ym));
   const cutoff = periodo === "30d" ? Date.now() - 30 * 864e5 : periodo === "90d" ? Date.now() - 90 * 864e5 : periodo === "ano" ? new Date(new Date().getFullYear(), 0, 1).getTime() : 0;
-  const events = allEvents.filter(e => (!cutoff || e.t >= cutoff) && (ativoF === "todos" || e.ativo === ativoF));
+  const noPeriodo = (e) => ehMes(periodo) ? e.ym === periodo : (!cutoff || e.t >= cutoff);
+  const events = allEvents.filter(e => noPeriodo(e) && (ativoF === "todos" || e.ativo === ativoF));
+  const periodoLabel = ehMes(periodo) ? rotuloMes(periodo) : (PERIODOS.find(p => p[0] === periodo) || [])[1] || "Tudo";
   const s = computeStats(events);
 
   const analisar = async () => {
@@ -3597,6 +3602,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
     try {
       const top = (o) => Object.entries(o).sort((a, b) => b[1].somaR - a[1].somaR).map(([k, v]) => `${k}: ${v.somaR.toFixed(1)}R (${v.n} ops, ${((v.w / v.n) * 100).toFixed(0)}% acerto)`).join("; ");
       const resumo = [
+        `Período analisado: ${periodoLabel}${ativoF !== "todos" ? " · só " + ativoF : ""}`,
         `Operações: ${s.n} (${s.gains} gain / ${s.losses} loss)`,
         `Taxa de acerto: ${(s.winRate * 100).toFixed(1)}%`,
         `R acumulado: ${s.somaR.toFixed(2)}R`,
@@ -3674,6 +3680,7 @@ function DashboardScreen({ session, targetUser, targetName, onBack, account = "r
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid " + T.line, paddingTop: 12 }}>
           <span style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4 }}>PERÍODO</span>
           {PERIODOS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setPeriodo(k)} style={chip(periodo === k)}>{l}</button>)}
+          <MesSelect meses={mesesDisp} value={periodo} onChange={setPeriodo} />
           {ativosDisp.length > 0 && <>
             <span style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, marginLeft: 8 }}>ATIVO</span>
             <button className="fh-btn" onClick={() => setAtivoF("todos")} style={chip(ativoF === "todos")}>Todos</button>
@@ -3835,8 +3842,12 @@ function TurmaScreen({ session }) {
   const day0 = new Date(); day0.setHours(0, 0, 0, 0); // início do dia de hoje
   const dias = period === "hoje" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : 0;
   const periodCut = dias ? day0.getTime() - (dias - 1) * 864e5 : 0; // inclui hoje + (dias-1) anteriores
-  const rankRows = (periodCut
-    ? rows.map(r => ({ st: r.st, alerts: r.alerts, stat: computeStats(r.ev.filter(e => e.t >= periodCut)) }))
+  // Ou um mês fechado ("AAAA-MM"), escolhido no seletor ao lado dos chips.
+  const mesRank = ehMes(period) ? period : null;
+  const mesesRank = mesesDe(rows.flatMap(r => r.ev.filter(e => e.t).map(e => e.ym)));
+  const naJanela = mesRank ? (e => e.ym === mesRank) : periodCut ? (e => e.t >= periodCut) : null;
+  const rankRows = (naJanela
+    ? rows.map(r => ({ st: r.st, alerts: r.alerts, stat: computeStats(r.ev.filter(naJanela)) }))
     : rows.map(r => ({ st: r.st, alerts: r.alerts, stat: r.stat }))
   ).filter(r => r.stat.n > 0);
   // Payoff sem perdas (só gains) é "infinito": ordena no topo e exibe "∞".
@@ -3848,6 +3859,7 @@ function TurmaScreen({ session }) {
   const atPg = pageInfo(atencao, atPage, 5);
   const rkPg = pageInfo(ranked, rkPage, 10);
   const periodLabel = (RANK_PERIODS.find(p => p[0] === period) || [])[1] || "Tudo";
+  const mesRankTxt = mesRank ? rotuloMes(mesRank).toLowerCase() : "";
 
   const chip = (active) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid " + (active ? T.lineGold : T.line), background: active ? T.goldSoft : "transparent", color: active ? T.gold : T.mut });
 
@@ -3904,18 +3916,19 @@ function TurmaScreen({ session }) {
         <div style={{ padding: "13px 18px", borderBottom: "1px solid " + T.line, background: T.panel2, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Ranking da turma</div>
-            <div style={{ fontSize: 12, color: T.dim }}>{ranked.length} {ranked.length === 1 ? "aluno" : "alunos"} · {period === "tudo" ? "histórico completo" : period === "hoje" ? "somente hoje" : "últimos " + periodLabel.toLowerCase()}</div>
+            <div style={{ fontSize: 12, color: T.dim }}>{ranked.length} {ranked.length === 1 ? "aluno" : "alunos"} · {mesRank ? mesRankTxt : period === "tudo" ? "histórico completo" : period === "hoje" ? "somente hoje" : "últimos " + periodLabel.toLowerCase()}</div>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: 11, color: T.dim }}>PERÍODO</span>
             {RANK_PERIODS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setRank(setPeriod, k)} style={chip(period === k)}>{l}</button>)}
+            <MesSelect meses={mesesRank} value={period} onChange={v => setRank(setPeriod, v)} />
             <span style={{ width: 1, height: 16, background: T.line, margin: "0 4px" }} />
             <span style={{ fontSize: 11, color: T.dim }}>ORDENAR</span>
             {RANK_KEYS.map(([k, l]) => <button key={k} className="fh-btn" onClick={() => setRank(setSortKey, k)} style={chip(sortKey === k)}>{l}</button>)}
           </div>
         </div>
         {ranked.length === 0
-          ? <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum aluno operou {period === "tudo" ? "ainda" : period === "hoje" ? "hoje" : "nos últimos " + periodLabel.toLowerCase()}.</div>
+          ? <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: T.dim }}>Nenhum aluno operou {mesRank ? "em " + mesRankTxt : period === "tudo" ? "ainda" : period === "hoje" ? "hoje" : "nos últimos " + periodLabel.toLowerCase()}.</div>
           : <>
         <div className="fh-scroll-x">
           <div style={{ minWidth: 760 }}>
@@ -4124,8 +4137,11 @@ function EstudoAmplitude() {
       }
       return { date: d.date, win: d.win.h - d.win.l, ibov: d.ibov.h - d.ibov.l };
     }).filter(Boolean);
+    // janela = nº de pregões (últimos N) ou um mês "AAAA-MM" do seletor.
+    if (ehMes(janela)) return base.filter(p => String(p.date).startsWith(janela));
     return janela ? base.slice(-janela) : base;
   }, [serie, modo, janela]);
+  const mesesSerie = useMemo(() => mesesDe((serie || []).map(d => String(d.date).slice(0, 7))), [serie]);
 
   const stats = useMemo(() => {
     if (pontos.length < 2) return null;
@@ -4148,7 +4164,10 @@ function EstudoAmplitude() {
   if (carregando && !serie) return <Loading label="Carregando a série histórica..." />;
   if (erro) return <Banner tone="red">{erro} <button className="fh-btn" onClick={() => carregar(false)} style={{ background: "transparent", border: "none", color: T.gold, textDecoration: "underline", padding: 0, marginLeft: 6 }}>tentar de novo</button></Banner>;
 
-  if (!pontos.length) {
+  // Vazio de verdade só quando a série inteira está vazia. Um filtro sem
+  // pregões (mês sem fechamento em %, p. ex.) mantém os filtros na tela —
+  // senão o aluno ficava preso no aviso, sem como trocar o filtro.
+  if (!(serie || []).length) {
     return (
       <EmptyState icon="📈" title="A série ainda está sendo formada"
         desc="Os pregões são coletados e guardados automaticamente todo dia. Se acabou de publicar, aguarde a primeira coleta ou force uma agora.">
@@ -4163,6 +4182,7 @@ function EstudoAmplitude() {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <Toggle opcoes={[{ k: "pts", r: "Pontos" }, { k: "pct", r: "%" }]} valor={modo} set={setModo} />
         <Toggle opcoes={JANELAS} valor={janela} set={setJanela} />
+        <MesSelect meses={mesesSerie} value={janela} onChange={setJanela} />
         <div style={{ flex: 1 }} />
         <Button variant="ghost" size="sm" onClick={() => setTabela(t => !t)}>{tabela ? "Ver gráfico" : "Ver tabela"}</Button>
         <Button variant="ghost" size="sm" onClick={() => carregar(true)} disabled={carregando}>{carregando ? "Atualizando..." : "Atualizar"}</Button>
@@ -4177,7 +4197,9 @@ function EstudoAmplitude() {
         ))}
       </div>
 
-      {tabela ? (
+      {!pontos.length ? (
+        <Banner tone="gold">Nenhum pregão com dados nesse filtro{modo === "pct" ? " (em %, só entram dias com fechamento dos dois)" : ""}.</Banner>
+      ) : tabela ? (
         <div className="fh-scroll-x">
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>

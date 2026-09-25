@@ -2,6 +2,7 @@
 // Tokens de tema + componentes reutilizáveis. Mantém a identidade preto/dourado,
 // mas com layout mais limpo: sans-serif para textos, monospace só para números.
 import { useEffect, useState } from "react";
+import { ehMes, rotuloMes } from "./shared";
 
 export const T = {
   bg: "#0a0a0b",
@@ -203,6 +204,24 @@ export function Tabs({ items, value, onChange }) {
         );
       })}
     </div>
+  );
+}
+
+// Seletor de mês que fica ao lado dos chips de período. `meses` são as chaves
+// "AAAA-MM" com dados (mais recente primeiro); `value` é o período atual, que
+// pode ser um chip ("30d", "tudo"...) ou um mês. Com mês escolhido ele acende
+// como chip ativo. Se o mês escolhido some da lista (troca de conta, p. ex.),
+// ele continua na lista para o seletor não mostrar um mês que não é o filtrado.
+export function MesSelect({ meses, value, onChange, style }) {
+  const on = ehMes(value);
+  const lista = on && !meses.includes(value) ? [value, ...meses].sort().reverse() : meses;
+  if (!lista.length) return null;
+  return (
+    <select className="fh-btn" aria-label="Filtrar por mês" value={on ? value : ""} onChange={e => onChange(e.target.value)}
+      style={{ padding: "6px 10px", borderRadius: 8, fontSize: 12, fontWeight: 600, colorScheme: "dark", border: "1px solid " + (on ? T.lineGold : T.line), background: on ? T.goldSoft : "transparent", color: on ? T.gold : T.mut, ...style }}>
+      <option value="" disabled style={{ background: T.panel, color: T.dim }}>Mês…</option>
+      {lista.map(m => <option key={m} value={m} style={{ background: T.panel, color: T.text }}>{rotuloMes(m)}</option>)}
+    </select>
   );
 }
 

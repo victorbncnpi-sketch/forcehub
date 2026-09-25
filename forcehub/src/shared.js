@@ -36,6 +36,19 @@ export async function resizeImage(file, maxDim = 1280, quality = 0.78) {
   return c.toDataURL("image/jpeg", quality);
 }
 
+// ─── Filtro de período por mês ────────────────────────────────────────────────
+// Os filtros de período (30 dias, 90 dias, Tudo...) ganharam um seletor de mês.
+// O mês vive no MESMO estado do período, como chave "AAAA-MM": assim escolher
+// um mês desmarca o chip e clicar num chip sai do mês, sem dois filtros
+// brigando entre si. `ehMes` é o que separa um caso do outro.
+export const NOMES_MES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+export const ehMes = (v) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(v == null ? "" : v));
+// "2026-09" -> "Setembro de 2026"
+export const rotuloMes = (ym) => ehMes(ym) ? NOMES_MES[+ym.slice(5, 7) - 1] + " de " + ym.slice(0, 4) : "";
+// Meses presentes nos dados, sem repetir, do mais recente para o mais antigo —
+// o seletor só oferece mês que tem o que mostrar.
+export const mesesDe = (yms) => Array.from(new Set((yms || []).filter(ehMes))).sort().reverse();
+
 // ─── Importação de CSV do Profit (Nelogica) ───────────────────────────────────
 // O relatório "Operações" do Profit vem em latin-1 (windows-1252), separado por
 // ";", com um preâmbulo (Conta/Titular/datas) antes da grade. Números em formato
