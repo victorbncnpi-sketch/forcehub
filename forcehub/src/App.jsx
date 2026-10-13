@@ -1090,9 +1090,6 @@ function PanoramaScreen({ session }) {
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <FechamentoBotao info={fechInfo} onOpen={() => setFechOpen(true)} />
-      {fechOpen && <FechamentoModal session={session} onClose={() => setFechOpen(false)} onLoaded={setFechInfo} />}
-
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 13, color: T.mut }}>Máxima · mínima · amplitude da semana — preenchido automaticamente e editável.</div>
         {loadingMarket
@@ -1173,6 +1170,10 @@ function PanoramaScreen({ session }) {
         <MarketBoard title="Commodities" items={srt(mkt?.groups?.commodities)} group="commodities" favs={favSet} onToggleFav={toggleFav} />
         <MarketBoard title="Cripto" items={srt(mkt?.groups?.cripto)} group="cripto" favs={favSet} onToggleFav={toggleFav} />
       </div>
+
+      {/* Fechamento do dia: entre as cotações e a seção de notícias/panorama */}
+      <FechamentoBotao info={fechInfo} onOpen={() => setFechOpen(true)} />
+      {fechOpen && <FechamentoModal session={session} onClose={() => setFechOpen(false)} onLoaded={setFechInfo} />}
 
       {/* Panorama IA (direcional do dia) + Notícias em duas colunas */}
       <div className="fh-news-grid">

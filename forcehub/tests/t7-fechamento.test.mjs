@@ -306,12 +306,19 @@ t("as notícias usam o RSS compartilhado", () => {
   contem(n, 'from "./_rss"');
   ehFalso(/function decodeEntities/.test(n), "news.js voltou a ter cópia do parser");
 });
-t("botão no topo do Panorama abre o modal", () => {
+t("botão no Panorama abre o modal", () => {
   const app = readFileSync("src/App.jsx", "utf8");
   const pan = app.slice(app.indexOf("function PanoramaScreen"));
   ehVerdade(/<FechamentoBotao info=\{fechInfo\}/.test(pan));
   ehVerdade(/<FechamentoModal session=\{session\}/.test(pan));
   contem(app, 'api.get("/api/fechamento?leve=1")');
+});
+t("o botão fica abaixo das cotações e acima de notícias/panorama", () => {
+  const app = readFileSync("src/App.jsx", "utf8");
+  const pan = app.slice(app.indexOf("function PanoramaScreen"));
+  const botao = pan.indexOf("<FechamentoBotao");
+  ehVerdade(pan.indexOf('<MarketBoard title="Cripto"') < botao, "precisa vir depois dos painéis de cotação");
+  ehVerdade(botao < pan.indexOf('<div className="fh-news-grid">'), "precisa vir antes de Panorama IA + Notícias");
 });
 console.log("");
 process.exit(resumo() ? 1 : 0);
