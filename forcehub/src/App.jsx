@@ -733,6 +733,239 @@ function AnaliseModal({ ativo, label, data, canWrite, onClose, onSaved }) {
   );
 }
 
+// ─── Fechamento do dia (botão no topo do Panorama + modal) ───────────────────
+// Cotação/máx/mín de IBOV, WIN e WDO, o resumo das notícias com a leitura delas
+// contra o movimento dos 3 ativos e as 3 maiores altas/baixas. É gerado UMA vez
+// por pregão no backend (api/_fechamento.js) e compartilhado: a tela só lê. O
+// botão usa a leitura leve (não dispara geração); o modal pede o completo, que
+// gera o do dia se ele ainda faltar depois das 18h30.
+const FECH_ATIVOS = [["IBOV", "Ibovespa"], ["WIN", "Mini Índice"], ["WDO", "Mini Dólar"]];
+const fechNum = (k, v) => v == null ? "—" : Number(v).toLocaleString("pt-BR", { minimumFractionDigits: k === "WDO" ? 1 : 0, maximumFractionDigits: k === "WDO" ? 1 : 0 });
+const fechVar = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
+const fechCor = (v) => v == null || v === 0 ? T.mut : v > 0 ? T.green : T.red;
+const fechDDMM = (iso) => iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : "";
+const fechDataLonga = (iso) => { const s = new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }); return s.charAt(0).toUpperCase() + s.slice(1); };
+
+function FechamentoBotao({ info, onOpen }) {
+  const f = info && info.fechamento;
+  const fase = info && info.fase;
+  const sub = f
+    ? "Pregão de " + fechDDMM(f.data) + (fase && fase.emPregao ? " · o de hoje sai após as 18h30" : " · cotações, notícias e destaques")
+    : "Cotações, notícias e destaques do pregão · disponível após as 18h30";
+  return (
+    <button className="fh-btn" onClick={onOpen} aria-haspopup="dialog"
+      style={{ width: "100%", justifyContent: "space-between", flexWrap: "wrap", gap: 12, whiteSpace: "normal", textAlign: "left", background: T.goldSoft, border: "1px solid " + T.lineGold, borderRadius: 14, padding: "12px 16px", color: T.text }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+        <span aria-hidden="true" style={{ fontSize: 22, lineHeight: 1 }}>🔔</span>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ display: "block", fontSize: 15, fontWeight: 700, color: T.gold }}>Fechamento do dia</span>
+          <span style={{ display: "block", fontSize: 12, color: T.mut, marginTop: 2 }}>{sub}</span>
+        </span>
+      </span>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {f && FECH_ATIVOS.map(([k]) => {
+          const a = f.ativos && f.ativos[k];
+          return (
+            <span key={k} style={{ fontSize: 12, fontFamily: T.mono, padding: "4px 8px", borderRadius: 7, border: "1px solid " + T.line, background: T.inset }}>
+              <span style={{ color: T.mut }}>{k}</span> <span style={{ color: fechCor(a && a.varPct), fontWeight: 700 }}>{fechVar(a && a.varPct)}</span>
+            </span>
+          );
+        })}
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>Abrir →</span>
+      </span>
+    </button>
+  );
+}
+
+const FechTitulo = ({ children }) => <div style={{ fontSize: 12, fontWeight: 800, color: T.gold, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>{children}</div>;
+
+function FechAtivoCard({ k, label, a, pregao }) {
+  return (
+    <div style={{ border: "1px solid " + T.line, borderRadius: 12, background: T.inset, padding: "12px 14px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 15, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{k}</span>
+        <span style={{ fontSize: 12, color: T.mut }}>{label}</span>
+        {a && a.contrato && <span style={{ fontSize: 11, color: T.dim, fontFamily: T.mono, marginLeft: "auto" }}>{a.contrato}</span>}
+      </div>
+      {a && a.fech != null ? (
+        <>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 22, fontWeight: 800, fontFamily: T.mono, color: T.text }}>{fechNum(k, a.fech)}</span>
+            <span style={{ fontSize: 14, fontWeight: 700, fontFamily: T.mono, color: fechCor(a.varPct) }}>{fechVar(a.varPct)}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 10 }}>
+            {[["MÁX", a.max, T.blue], ["MÍN", a.min, T.purple], ["AMPL", a.max != null && a.min != null ? a.max - a.min : null, T.gold]].map(([l, v, c]) => (
+              <div key={l}>
+                <div style={{ fontSize: 10, color: T.dim, letterSpacing: 0.4 }}>{l}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T.mono, color: c }}>{fechNum(k, v)}</div>
+              </div>
+            ))}
+          </div>
+          {a.data && a.data !== pregao && <div style={{ fontSize: 11, color: T.gold, marginTop: 8 }}>Dado de {fechDDMM(a.data)} — o do pregão ainda não foi publicado.</div>}
+        </>
+      ) : <div style={{ fontSize: 13, color: T.dim, marginTop: 10 }}>Cotação indisponível.</div>}
+    </div>
+  );
+}
+
+function FechDestaques({ titulo, itens, cor }) {
+  return (
+    <div style={{ border: "1px solid " + T.line, borderRadius: 12, overflow: "hidden" }}>
+      <div style={{ padding: "8px 12px", fontSize: 12, fontWeight: 700, color: cor, background: T.panel2, borderBottom: "1px solid " + T.line }}>{titulo}</div>
+      {itens.map((x, i) => (
+        <div key={x.ticker} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto", alignItems: "center", gap: 10, padding: "8px 12px", borderTop: i ? "1px solid " + T.line : "none" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T.mono, color: T.text }}>{x.ticker}</div>
+            {x.nome && <div style={{ fontSize: 11, color: T.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.nome}</div>}
+          </div>
+          <span style={{ fontSize: 12, fontFamily: T.mono, color: T.mut }}>R$ {Number(x.preco).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: T.mono, color: fechCor(x.varPct), minWidth: 62, textAlign: "right" }}>{fechVar(x.varPct)}</span>
+        </div>
+      ))}
+      {!itens.length && <div style={{ padding: 12, fontSize: 12, color: T.dim }}>Sem dados.</div>}
+    </div>
+  );
+}
+
+function FechamentoModal({ session, onClose, onLoaded }) {
+  const staff = !!session && (session.role === "superadmin" || session.role === "moderator");
+  const [info, setInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refazendo, setRefazendo] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [esperas, setEsperas] = useState(0);
+
+  const aplicar = (j) => { setInfo(j); if (onLoaded) onLoaded(j); setErro(j.erro || null); };
+  const carregar = async () => {
+    try { aplicar(await api.get("/api/fechamento")); }
+    catch (e) { setErro(e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { carregar(); }, []);
+  // Outro acesso já está gerando o do dia: espera e relê (no máx. ~1 min).
+  useEffect(() => {
+    if (!info || !info.gerando || esperas >= 8) return;
+    const t = setTimeout(() => { setEsperas(n => n + 1); carregar(); }, 8000);
+    return () => clearTimeout(t);
+  }, [info, esperas]);
+  const refazer = async () => {
+    setRefazendo(true); setErro(null);
+    try { aplicar(await api.post("/api/fechamento", {})); }
+    catch (e) { setErro(e.message); }
+    setRefazendo(false);
+  };
+
+  const f = info && info.fechamento;
+  const fase = info && info.fase;
+  const an = f && f.analise;
+  const d = f && f.destaques;
+
+  return (
+    <Modal title="🔔 Fechamento do dia" onClose={onClose} width={860}>
+      {loading ? (
+        <div style={{ padding: 30, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
+          <Spinner />
+          <span style={{ fontSize: 13, color: T.mut }}>Buscando o fechamento…</span>
+          <span style={{ fontSize: 12, color: T.dim, maxWidth: 380, lineHeight: 1.5 }}>Se for o primeiro acesso depois do pregão, a IA leva cerca de 20 segundos para montar o resumo.</span>
+        </div>
+      ) : !f ? (
+        <EmptyState icon="🔔" title="Ainda não há fechamento"
+          desc={erro ? erro : fase && fase.emPregao ? "O fechamento de hoje sai depois das 18h30, quando o pregão encerra." : "O fechamento ainda não foi gerado. Tente de novo em alguns minutos."}>
+          {staff && <Button size="sm" onClick={refazer} disabled={refazendo}>{refazendo ? "⟳ Gerando..." : "Gerar agora"}</Button>}
+        </EmptyState>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>Pregão de {fechDataLonga(f.data)}</div>
+              <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Gerado às {fmtTime(f.generatedAt)}{f.completo ? "" : " · parcial"}</div>
+            </div>
+            {staff && <Button variant="ghost" size="sm" onClick={refazer} disabled={refazendo}>{refazendo ? "⟳ Refazendo..." : "↻ Refazer agora"}</Button>}
+          </div>
+
+          {fase && fase.emPregao && <Banner tone="blue">Pregão em andamento: o fechamento de hoje sai depois das 18h30. Abaixo, o do último pregão.</Banner>}
+          {info.gerando && <Banner tone="blue">O fechamento mais recente está sendo gerado agora — esta janela atualiza sozinha.</Banner>}
+          {!f.completo && !info.gerando && <Banner tone="gold">Parte dos dados ainda não foi publicada pela fonte (os futuros saem à noite). O fechamento é completado automaticamente.</Banner>}
+          {erro && <Banner tone="red">{erro}</Banner>}
+
+          <div>
+            <FechTitulo>Cotações do pregão</FechTitulo>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+              {FECH_ATIVOS.map(([k, l]) => <FechAtivoCard key={k} k={k} label={l} a={f.ativos && f.ativos[k]} pregao={f.data} />)}
+            </div>
+          </div>
+
+          {an ? (
+            <>
+              {an.resumo && (
+                <div>
+                  <FechTitulo>Resumo do dia</FechTitulo>
+                  <div style={{ fontSize: 14, color: T.text, lineHeight: 1.65 }}>{an.resumo}</div>
+                </div>
+              )}
+              {an.noticias && an.noticias.length > 0 && (
+                <div>
+                  <FechTitulo>Notícias e o efeito no mercado</FechTitulo>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {an.noticias.map((n, i) => (
+                      <div key={i} style={{ borderLeft: "2px solid " + T.lineGold, paddingLeft: 12 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: T.text, lineHeight: 1.45 }}>{n.titulo}</div>
+                        {n.texto && <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.55, marginTop: 3 }}>{n.texto}</div>}
+                        {n.efeito && <div style={{ fontSize: 13, color: T.text, lineHeight: 1.55, marginTop: 4 }}><span style={{ color: T.gold, fontWeight: 700 }}>Efeito: </span>{n.efeito}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {an.ativos && Object.keys(an.ativos).length > 0 && (
+                <div>
+                  <FechTitulo>Leitura por ativo</FechTitulo>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {FECH_ATIVOS.filter(([k]) => an.ativos[k]).map(([k, l]) => (
+                      <div key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <Badge tone="gold" style={{ flexShrink: 0, minWidth: 48, justifyContent: "center" }}>{k}</Badge>
+                        <div style={{ fontSize: 13, color: T.text, lineHeight: 1.55 }} title={l}>{an.ativos[k]}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : <Banner tone="gold">O resumo das notícias pela IA não ficou pronto nesta geração. As cotações e os destaques são do pregão.</Banner>}
+
+          {d && (
+            <div>
+              <FechTitulo>Destaques do dia</FechTitulo>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 10 }}>
+                <FechDestaques titulo="▲ Maiores altas" itens={d.altas || []} cor={T.green} />
+                <FechDestaques titulo="▼ Maiores baixas" itens={d.baixas || []} cor={T.red} />
+              </div>
+              <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>{d.criterio === "volume" ? "Entre as 100 ações com maior volume na B3." : "Entre as 100 maiores empresas da B3 por valor de mercado."}</div>
+            </div>
+          )}
+
+          {f.manchetes && f.manchetes.length > 0 && (
+            <div>
+              <FechTitulo>Fontes do dia</FechTitulo>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {f.manchetes.map((h, i) => (
+                  <a key={i} href={h.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, lineHeight: 1.6, textDecoration: "none", color: T.mut }}>
+                    <span style={{ color: T.gold, marginRight: 6 }}>›</span>{h.title}{h.source && <span style={{ color: T.dim }}> · {h.source}</span>}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Disclaimer title="Conteúdo informativo">
+            Resumo gerado por IA a partir das cotações do pregão e das notícias do dia. É conteúdo educacional — <b>não é recomendação de investimento</b>.
+          </Disclaimer>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function PanoramaScreen({ session }) {
   const TICKERS = ["WIN", "WDO", "IBOV"];
   const LABELS = { WIN: "Mini Índice", WDO: "Mini Dólar", IBOV: "Ibovespa" };
@@ -750,6 +983,10 @@ function PanoramaScreen({ session }) {
   const [manualTickers, setManualTickers] = useState([]);
   const [mkt, setMkt] = useState(null);
   const canWriteAnalise = !!session && (session.role === "superadmin" || session.role === "moderator");
+  // Fechamento do dia: o botão lê o resumo (leitura leve, sem gerar); o modal pede o completo.
+  const [fechInfo, setFechInfo] = useState(null);
+  const [fechOpen, setFechOpen] = useState(false);
+  useEffect(() => { let on = true; api.get("/api/fechamento?leve=1").then(j => { if (on) setFechInfo(j); }).catch(() => {}); return () => { on = false; }; }, []);
   const [analises, setAnalises] = useState({});
   const [analiseAtivo, setAnaliseAtivo] = useState(null); // ativo cujo modal está aberto
   const loadAnalises = async () => { try { const j = await api.get("/api/analise"); if (j && j.analises) setAnalises(j.analises); } catch (e) {} };
@@ -853,6 +1090,9 @@ function PanoramaScreen({ session }) {
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <FechamentoBotao info={fechInfo} onOpen={() => setFechOpen(true)} />
+      {fechOpen && <FechamentoModal session={session} onClose={() => setFechOpen(false)} onLoaded={setFechInfo} />}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 13, color: T.mut }}>Máxima · mínima · amplitude da semana — preenchido automaticamente e editável.</div>
         {loadingMarket

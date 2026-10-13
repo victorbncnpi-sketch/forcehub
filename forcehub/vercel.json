@@ -7,6 +7,7 @@
     { "source": "/api/market-data", "destination": "/api/market?kind=market-data" },
     { "source": "/api/cotacoes", "destination": "/api/market?kind=cotacoes" },
     { "source": "/api/tickers", "destination": "/api/market?kind=tickers" },
+    { "source": "/api/fechamento", "destination": "/api/market?kind=fechamento" },
     { "source": "/api/cohort", "destination": "/api/users?fn=cohort" },
     { "source": "/api/seed-demo", "destination": "/api/users?fn=seeddemo" }
   ],

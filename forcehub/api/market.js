@@ -5,6 +5,7 @@
 //   /api/market-data  -> ?kind=market-data   (WIN/WDO/IBOV)
 //   /api/cotacoes     -> ?kind=cotacoes       (cotações por ticker)
 //   /api/tickers      -> ?kind=tickers        (autocomplete de ativos)
+//   /api/fechamento   -> ?kind=fechamento    (Fechamento do dia do Panorama)
 // Sem URL antiga (nasceram já no roteador): ?kind=options, ?kind=estudos.
 // A lógica de cada um vive nos helpers "_"-prefixados (não roteados).
 import markets from "./_markets";
@@ -13,8 +14,9 @@ import cotacoes from "./_cotacoes";
 import tickers from "./_tickers";
 import options from "./_options";
 import estudos from "./_estudos";
+import fechamento from "./_fechamento";
 
-const ROUTES = { markets, "market-data": marketData, cotacoes, tickers, options, estudos };
+const ROUTES = { markets, "market-data": marketData, cotacoes, tickers, options, estudos, fechamento };
 
 export default async function handler(req, res) {
   const kind = String((req.query && req.query.kind) || "").trim();

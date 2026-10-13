@@ -5,7 +5,8 @@
 //   1) as recomendações compartilhadas  -> gatilho/expiração/encerramento;
 //   2) as posições aceitas de cada usuário -> idem;
 //   3) a carteira própria de cada usuário  -> marcação EOD das opções +
-//      encerramento automático por alvo/stop (ações e opções).
+//      encerramento automático por alvo/stop (ações e opções);
+//   4) o Fechamento do dia do Panorama     -> gerado uma vez por pregão.
 //
 // A detecção reaproveita as MESMAS funções usadas no GET das telas, cada uma com
 // sua trava por escopo — então cron e navegação cooperam (nada roda em dobro).
@@ -13,6 +14,7 @@ import { runGatilho } from "./_gatilho";
 import { runOptionMarks, runOwnAutoClose } from "./_options";
 import { coletarAmplitude } from "./_estudos";
 import { getUsers } from "./_auth";
+import { obterFechamento } from "./_fechamento";
 
 const CART_KEY = "forcehub:carteira";
 const keyRec = (u) => "forcehub:positions:" + u;
@@ -63,6 +65,15 @@ export async function cronSweep(redis) {
       }
     } catch (e) { out.errors.push("own:" + u); }
   }
+
+  // 4) Fechamento do dia. Por último: é o passo mais lento (IA com busca) e não
+  // pode atrasar as varreduras acima. Na cron do meio do dia não faz nada — com
+  // o pregão aberto, obterFechamento só devolve o fechamento anterior.
+  try {
+    const f = await obterFechamento(redis);
+    out.fechamento = f.fechamento ? { data: f.fechamento.data, completo: !!f.fechamento.completo } : null;
+    if (f.erro) out.errors.push("fechamento:" + f.erro);
+  } catch (e) { out.errors.push("fechamento:" + (e && e.message || e)); }
 
   return out;
 }

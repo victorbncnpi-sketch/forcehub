@@ -9,6 +9,7 @@
 // GET /api/news?refresh=1  -> força nova geração
 import { getRedis } from "./_redis";
 import { geminiText, extractJSON } from "./_ai";
+import { gnews, lerFeeds } from "./_rss";
 
 // Frescor geral do payload (agenda/manchetes — fontes gratuitas, sem IA).
 const TTL_MIN = Number(process.env.NEWS_TTL_MIN) || 30;
@@ -254,10 +255,7 @@ async function briefSummary(today) {
 }
 
 // ─── RSS: manchetes reais (com link) ─────────────────────────────────────────
-// Google News RSS é acessível de datacenter (a Vercel) e traz manchetes reais
-// com link + nome do veículo. InfoMoney/Money Times entram como reforço, mas
-// costumam bloquear requisições de datacenter (Cloudflare) — por isso opcionais.
-const gnews = (q) => "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:2d") + "&hl=pt-BR&gl=BR&ceid=BR:pt";
+// Parser e leitura dos feeds em api/_rss.js (compartilhado com o Fechamento).
 const RSS_FEEDS = [
   { url: gnews("Ibovespa OR bolsa OR \"mercado financeiro\""), source: "" },
   { url: gnews("dólar OR juros OR Selic OR \"economia brasil\""), source: "" },
@@ -265,56 +263,9 @@ const RSS_FEEDS = [
   { url: "https://www.infomoney.com.br/mercados/feed/", source: "InfoMoney" },
 ];
 
-function decodeEntities(s) {
-  return String(s)
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&#8217;|&#8216;|&rsquo;|&lsquo;|&#39;|&apos;/g, "'")
-    .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|&quot;/g, '"')
-    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "–")
-    .replace(/&hellip;|&#8230;/g, "…")
-    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ").trim();
-}
-
-function pickTag(block, tag) {
-  const m = block.match(new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "i"));
-  return m ? m[1] : "";
-}
-
-async function fetchOneFeed(feed) {
-  const r = await fetch(feed.url, { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "accept": "application/rss+xml, application/xml, text/xml" } });
-  if (!r.ok) throw new Error((feed.source || "rss") + " HTTP " + r.status);
-  const xml = await r.text();
-  const blocks = xml.split(/<item[\s>]/i).slice(1);
-  return blocks.map(b => {
-    let title = decodeEntities(pickTag(b, "title"));
-    const url = decodeEntities(pickTag(b, "link"));
-    const pub = pickTag(b, "pubDate");
-    const ts = pub ? Date.parse(pub) || 0 : 0;
-    // Google News: o veículo vem em <source> e o título termina com " - Veículo".
-    const srcTag = decodeEntities(pickTag(b, "source"));
-    const source = feed.source || srcTag;
-    if (srcTag && title.endsWith(" - " + srcTag)) title = title.slice(0, -(srcTag.length + 3)).trim();
-    return { title, url, source, ts };
-  }).filter(h => h.title && h.url);
-}
-
 async function fetchRssHeadlines() {
-  const results = await Promise.allSettled(RSS_FEEDS.map(fetchOneFeed));
-  const all = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
-  if (!all.length) return [];
-  // Dedup por título e ordena pela mais recente.
-  const seen = new Set();
-  const unique = [];
-  for (const h of all.sort((a, b) => b.ts - a.ts)) {
-    const key = h.title.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push({ title: h.title, url: h.url, source: h.source });
-    if (unique.length >= 12) break;
-  }
-  return unique;
+  const lista = await lerFeeds(RSS_FEEDS, { max: 12 });
+  return lista.map(h => ({ title: h.title, url: h.url, source: h.source }));
 }
 
 // ─── IA: manchetes do mercado (fallback) ─────────────────────────────────────
