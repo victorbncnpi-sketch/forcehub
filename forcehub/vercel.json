@@ -9,7 +9,8 @@
     { "source": "/api/tickers", "destination": "/api/market?kind=tickers" },
     { "source": "/api/fechamento", "destination": "/api/market?kind=fechamento" },
     { "source": "/api/cohort", "destination": "/api/users?fn=cohort" },
-    { "source": "/api/seed-demo", "destination": "/api/users?fn=seeddemo" }
+    { "source": "/api/seed-demo", "destination": "/api/users?fn=seeddemo" },
+    { "source": "/api/produtos", "destination": "/api/users?fn=produtos" }
   ],
   "crons": [
     { "path": "/api/posicoes?cron=1", "schedule": "30 16 * * 1-5" },

@@ -9,6 +9,7 @@ export {
   PAGE_CAPS, DEFAULT_CLIENT_PERMS, SUPERADMIN, ROLES,
   isStaff, effectivePerms, sessionCan, publicUser, isExpired,
   hashPassword, verifyPassword, generatePassword, normalizeEmail, EMAIL_RE,
+  sealPassword, revealPassword, setUserPassword,
 } from "../../api/_auth.js";
 
 export async function getSession() { return globalThis.__SESSION__ || null; }

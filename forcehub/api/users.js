@@ -15,9 +15,12 @@ import {
 } from "./_auth";
 // Sub-rotas de staff agrupadas nesta função (economia de funções na Vercel).
 // As URLs antigas seguem via rewrites: /api/cohort -> ?fn=cohort, /api/seed-demo
-// -> ?fn=seeddemo. Cada handler faz a própria checagem de sessão/permissão.
+// -> ?fn=seeddemo, /api/produtos -> ?fn=produtos. Cada handler faz a própria
+// checagem de sessão/permissão (a vitrine de produtos tem até rota pública: o
+// link de compartilhamento).
 import cohortHandler from "./_cohort";
 import seedDemoHandler from "./_seed-demo";
+import produtosHandler from "./_produtos";
 
 const USER_RE = /^[a-z0-9._-]{3,32}$/;
 // Garante e-mail válido e não usado por outra conta (para reset/alertas futuros).
@@ -35,6 +38,7 @@ export default async function handler(req, res) {
   const fn = String((req.query && req.query.fn) || "").trim();
   if (fn === "cohort") return cohortHandler(req, res);
   if (fn === "seeddemo") return seedDemoHandler(req, res);
+  if (fn === "produtos") return produtosHandler(req, res);
 
   const redis = getRedis();
   if (!redis) return res.status(503).json({ ok: false, error: "Banco não configurado (defina UPSTASH_REDIS_REST_URL/TOKEN)." });

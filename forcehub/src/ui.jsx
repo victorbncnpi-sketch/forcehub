@@ -364,6 +364,7 @@ const ICON_PATHS = {
   chevron: <polyline points="6 9 12 15 18 9" />,
   personal: <><circle cx="8.5" cy="7" r="3" /><path d="M3 19a5.5 5.5 0 0 1 11 0" /><polyline points="14 12 17 9 19 11 22 6.5" /></>,
   alert: <><path d="M12 4l9 16H3z" /><line x1="12" y1="10" x2="12" y2="14" /><circle cx="12" cy="17" r=".6" /></>,
+  produtos: <><path d="M5 8h14l-1.2 12H6.2z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /></>,
 };
 
 export function Icon({ name, size = 18, color, style }) {

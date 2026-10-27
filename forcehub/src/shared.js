@@ -49,6 +49,20 @@ export const rotuloMes = (ym) => ehMes(ym) ? NOMES_MES[+ym.slice(5, 7) - 1] + " 
 // o seletor só oferece mês que tem o que mostrar.
 export const mesesDe = (yms) => Array.from(new Set((yms || []).filter(ehMes))).sort().reverse();
 
+// ─── Preço digitado (vitrine de Produtos) ─────────────────────────────────────
+// Aceita o que a pessoa digita: "97", "97,90", "1.997,00", "R$ 1.997" e também
+// "97.90". Sem vírgula, o ponto é decimal só com 1-2 casas depois dele ("97.90");
+// com grupos de 3 ("1.997") é milhar. O brNum do Profit não serve aqui: ele
+// trataria "97.90" como 9790. null = não é um preço.
+export function precoDeTexto(v) {
+  let s = String(v == null ? "" : v).replace(/R\$/gi, "").replace(/\s/g, "");
+  if (!s) return null;
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, "");
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  return Math.round(parseFloat(s) * 100) / 100;
+}
+
 // ─── Importação de CSV do Profit (Nelogica) ───────────────────────────────────
 // O relatório "Operações" do Profit vem em latin-1 (windows-1252), separado por
 // ";", com um preâmbulo (Conta/Titular/datas) antes da grade. Números em formato

@@ -18,8 +18,8 @@ export const ROLES = ["client", "moderator", "superadmin"];
 // "personal" fica FORA de DEFAULT_CLIENT_PERMS de propósito: o Personal
 // Trader é um produto à parte, e o acesso é concedido junto com a matrícula
 // no ciclo (ver garantirPermissao em api/_pt.js).
-export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos", "personal"];
-export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio", "estudos"];
+export const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos", "personal", "produtos"];
+export const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio", "estudos", "produtos"];
 
 // Cadastro inicial — usado apenas se o banco ainda não tiver usuários.
 // Estas senhas são só a semente; troque-as pelo painel admin após o 1º login.
@@ -165,6 +165,11 @@ function normalizeUsers(map) {
     if (u.role === "client" && Array.isArray(u.perms) && !u.estudosMigrated) {
       if (!u.perms.includes("estudos")) u.perms.push("estudos");
       u.estudosMigrated = true; changed = true;
+    }
+    // Idem para "produtos" (vitrine do que o Victor vende): concessão única.
+    if (u.role === "client" && Array.isArray(u.perms) && !u.produtosMigrated) {
+      if (!u.perms.includes("produtos")) u.perms.push("produtos");
+      u.produtosMigrated = true; changed = true;
     }
   }
   return changed;

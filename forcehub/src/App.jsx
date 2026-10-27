@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { api, resizeImage, parseProfitCsv, ehMes, rotuloMes, mesesDe } from "./shared";
 import PersonalScreen from "./personal";
+import ProdutosScreen, { OfertaPublica } from "./produtos";
 import { T, GlobalStyle, Logo, Button, Badge, Card, Field, Input, EmptyState, Stat, Banner, Disclaimer, Tabs, Modal, Section, Dots, Spinner, Loading, Icon, confirmDialog, ConfirmHost, MesSelect } from "./ui";
 
 // ─── Permissões (espelham api/_auth.js) ──────────────────────────────────────
@@ -17,9 +18,10 @@ const CAP_LABELS = {
   portfolio: "Minha Carteira (ações e opções)",
   estudos: "Estudos de Mercado",
   personal: "Personal Trader (mentoria de 30 dias)",
+  produtos: "Produtos (vitrine)",
 };
-const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos", "personal"];
-const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio", "estudos"];
+const PAGE_CAPS = ["panorama", "carteira", "carteira_write", "conselheiro", "trades", "portfolio", "estudos", "personal", "produtos"];
+const DEFAULT_CLIENT_PERMS = ["panorama", "carteira", "conselheiro", "trades", "portfolio", "estudos", "produtos"];
 const ROLE_LABEL = { superadmin: "Super admin", moderator: "Moderador", client: "Cliente" };
 
 function can(session, cap) {
@@ -194,6 +196,7 @@ const NAV = [
   { key: "conselheiro", icon: "conselheiro", label: "Conselheiro", title: "O Conselheiro",         cap: "conselheiro" },
   { key: "estudos",     icon: "estudos",     label: "Estudos",     title: "Estudos de Mercado",    cap: "estudos" },
   { key: "personal",    icon: "personal",    label: "Personal Trader", title: "Personal Trader",   cap: "personal" },
+  { key: "produtos",    icon: "produtos",    label: "Produtos",    title: "Produtos",              cap: "produtos" },
   { key: "trades",      icon: "journal",     label: "Meus Trades", title: "Diário de Trades",      cap: "trades" },
   { key: "dashboard",   icon: "dashboard",   label: "Dashboard",   title: "Dashboard de Performance", cap: "trades" },
   { key: "turma",       icon: "cohort",      label: "Turma",       title: "Painel da Turma",       cap: "cohort" },
@@ -2739,7 +2742,7 @@ function ConselheiroScreen({ userId, account = "real", setAccount }) {
 }
 
 // ─── Gestão de Usuários (super admin / moderador) ─────────────────────────────
-const CAP_SHORT = { panorama: "Pan", carteira: "Cart", carteira_write: "Cart✎", conselheiro: "IA", trades: "Dash" };
+const CAP_SHORT = { panorama: "Pan", carteira: "Cart", carteira_write: "Cart✎", conselheiro: "IA", trades: "Dash", portfolio: "MinhaCart", estudos: "Est", personal: "PT", produtos: "Prod" };
 const roleBadge = (r) => r === "superadmin"
   ? <Badge tone="gold">SUPER</Badge>
   : r === "moderator" ? <Badge tone="blue">MODER.</Badge> : <Badge tone="mut">CLIENTE</Badge>;
@@ -4511,6 +4514,7 @@ export default function App() {
   });
   const setAccount = (a) => { const v = a === "sim" ? "sim" : "real"; setAccountRaw(v); try { localStorage.setItem("fh_account", v); } catch (e) {} };
   const enter = (s) => { setSession(s); setActive(firstAllowed(s)); };
+  const [ofertaToken] = useState(() => { try { return new URLSearchParams(window.location.search).get("oferta") || null; } catch (e) { return null; } });
 
   // Restaura a sessão a partir do cookie (mantém o login após recarregar).
   useEffect(() => {
@@ -4528,6 +4532,17 @@ export default function App() {
 
   // Página efetiva: nunca renderiza algo que o usuário não pode acessar.
   const current = NAV.find(n => n.key === active && can(session, n.cap)) ? active : firstAllowed(session);
+
+  // Link de oferta (/?oferta=<token>): página pública, abre com ou sem login —
+  // é por ele que item interno chega a aluno específico ou a ganhador de sorteio.
+  if (ofertaToken) {
+    return (
+      <>
+        <GlobalStyle />
+        <OfertaPublica token={ofertaToken} />
+      </>
+    );
+  }
 
   if (booting) {
     return (
@@ -4557,6 +4572,7 @@ export default function App() {
         {current === "conselheiro" && <ConselheiroScreen userId={session?.user} account={account} setAccount={setAccount} />}
         {current === "estudos" && <EstudosScreen />}
         {current === "personal" && <PersonalScreen session={session} />}
+        {current === "produtos" && <ProdutosScreen session={session} />}
         {current === "trades" && <TradesScreen session={session} account={account} setAccount={setAccount} />}
         {current === "dashboard" && <DashboardScreen session={session} account={account} setAccount={setAccount} />}
         {current === "turma" && <TurmaScreen session={session} />}
