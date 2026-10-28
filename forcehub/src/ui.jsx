@@ -80,6 +80,8 @@ input, textarea { font-family: inherit; }
 @media (max-width: 860px) {
   .fh-shell { grid-template-columns: 64px 1fr; }
   .fh-nav-label, .fh-brand-text, .fh-side-detail { display: none; }
+  /* Fora da barra lateral (ex.: página pública de oferta) o nome continua. */
+  .fh-logo-full .fh-brand-text { display: inline; }
   .fh-page { padding: 16px; }
 }
 @media (max-width: 720px) {

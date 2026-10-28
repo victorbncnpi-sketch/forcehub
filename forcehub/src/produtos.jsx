@@ -10,8 +10,8 @@
 //
 // As regras (validação, quem vê o quê, o preço "de" do combo) moram em
 // api/_produtos.js. Esta tela não recalcula desconto: mostra o que vem de lá.
-import { useState, useEffect } from "react";
-import { api, precoDeTexto } from "./shared";
+import { useState, useEffect, useRef } from "react";
+import { api, precoDeTexto, resizeImage } from "./shared";
 import { T, Logo, Button, Badge, Card, Field, Input, EmptyState, Banner, Modal, Loading, Icon, confirmDialog } from "./ui";
 
 const BRL = (v) => v == null || !isFinite(v) ? "—" : "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -35,9 +35,22 @@ function Comprar({ link, grande }) {
 }
 
 // Corpo comum ao card da vitrine e à página de oferta.
+// Imagem do item: proporção fixa e "contain" — capa quadrada, banner largo ou
+// logo com fundo transparente aparecem inteiros, sem corte. Se não carregar,
+// some em vez de deixar um ícone quebrado.
+function Imagem({ src, alt, grande }) {
+  const [falhou, setFalhou] = useState(false);
+  if (!src || falhou) return null;
+  return (
+    <img src={src} alt={alt} loading="lazy" onError={() => setFalhou(true)}
+      style={{ display: "block", width: "100%", aspectRatio: grande ? "16 / 9" : "16 / 10", objectFit: "contain", background: "#000", borderRadius: 10, border: "1px solid " + T.line }} />
+  );
+}
+
 function ItemCorpo({ item, combo, staff, grande }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
+      <Imagem key={item.imagem || "-"} src={item.imagem} alt={item.nome} grande={grande} />
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: grande ? 22 : 16, fontWeight: 800, color: T.text, lineHeight: 1.3, flex: "1 1 160px", minWidth: 0, overflowWrap: "anywhere" }}>{item.nome}</div>
         <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -105,7 +118,25 @@ function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
   }));
   const [erro, setErro] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Imagem: undefined = mantém a atual; null = remover; data URL = nova.
+  const [imagem, setImagem] = useState(undefined);
+  const [imgBusy, setImgBusy] = useState(false);
+  const fileRef = useRef(null);
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+  const previa = imagem || (imagem === undefined && item && item.imagem) || null;
+  const escolherImagem = async (file) => {
+    if (!file) return;
+    setImgBusy(true); setErro(null);
+    try {
+      // Comprime no navegador; se ainda passar de ~900KB, reduz mais um pouco.
+      let d = await resizeImage(file, 1200, 0.82);
+      if (d.length > 900 * 1024) d = await resizeImage(file, 900, 0.72);
+      if (d.length > 900 * 1024) setErro("Imagem grande demais mesmo depois de comprimida — tente outra.");
+      else setImagem(d);
+    } catch (e) { setErro("Não consegui ler essa imagem — use JPG, PNG ou WebP."); }
+    setImgBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+  };
   const preco = precoDeTexto(f.preco);
   const escolhidos = produtos.filter(p => f.itens.includes(p.id));
   const soma = escolhidos.reduce((s, p) => s + (p.preco || 0), 0);
@@ -120,7 +151,8 @@ function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
     if (combo && !f.itens.length) return setErro("Escolha pelo menos um produto para o combo.");
     setBusy(true); setErro(null);
     try {
-      await onSalvar({ id: item && item.id, nome: f.nome, descricao: f.descricao, preco, link: f.link.trim(), interno: f.interno, ...(combo ? { itens: f.itens } : {}) });
+      await onSalvar({ id: item && item.id, nome: f.nome, descricao: f.descricao, preco, link: f.link.trim(), interno: f.interno,
+        ...(imagem !== undefined ? { imagem } : {}), ...(combo ? { itens: f.itens } : {}) });
     } catch (e) { setErro(e.message); setBusy(false); }
   };
 
@@ -136,6 +168,26 @@ function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
           <textarea className="fh-input" value={f.descricao} onChange={e => set("descricao", e.target.value)} rows={4} maxLength={2000}
             placeholder="O que a pessoa recebe, para quem é, bônus…" style={{ resize: "vertical", lineHeight: 1.5, fontFamily: T.sans }} />
         </Field>
+
+        <div>
+          <div style={{ fontSize: 11, color: T.mut, marginBottom: 6, letterSpacing: 0.4, textTransform: "uppercase" }}>Imagem</div>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: "none" }}
+            onChange={e => escolherImagem(e.target.files && e.target.files[0])} />
+          {previa ? (
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <img src={previa} alt="Prévia" style={{ width: 200, maxWidth: "100%", aspectRatio: "16 / 10", objectFit: "contain", background: "#000", borderRadius: 8, border: "1px solid " + T.line }} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <Button variant="ghost" size="sm" onClick={() => fileRef.current && fileRef.current.click()} disabled={imgBusy}>{imgBusy ? "Processando..." : "Trocar imagem"}</Button>
+                <Button variant="ghost" size="sm" onClick={() => setImagem(null)} disabled={imgBusy} style={{ color: T.red }}>Remover</Button>
+              </div>
+            </div>
+          ) : (
+            <Button variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={imgBusy}>
+              <Icon name="attach" size={16} /> {imgBusy ? "Processando..." : "Escolher imagem"}
+            </Button>
+          )}
+          <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>Opcional. JPG, PNG ou WebP — a imagem é reduzida para até 1200 px antes de enviar.</div>
+        </div>
 
         {combo && (
           <div>
@@ -176,7 +228,7 @@ function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={salvar} disabled={busy}>{busy ? "Salvando..." : "Salvar"}</Button>
+          <Button onClick={salvar} disabled={busy || imgBusy}>{busy ? "Salvando..." : "Salvar"}</Button>
         </div>
       </div>
     </Modal>
@@ -299,7 +351,7 @@ export function OfertaPublica({ token }) {
   const it = st.item;
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 16px", gap: 24 }}>
-      <Logo size={20} />
+      <div className="fh-logo-full"><Logo size={20} /></div>
       <div style={{ width: 620, maxWidth: "100%" }}>
         {st.loading ? <Loading label="Carregando oferta..." />
           : st.erro ? (

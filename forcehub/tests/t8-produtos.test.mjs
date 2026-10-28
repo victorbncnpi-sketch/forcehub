@@ -1,5 +1,5 @@
 import { secao, t, ta, eq, ehVerdade, ehFalso, contem, resumo, fakeRedis, chamar } from "./runner.mjs";
-import handler, { precoValido, linkValido, validarProduto, validarCombo, TOKEN_RE } from "../api/_produtos";
+import handler, { precoValido, linkValido, validarProduto, validarCombo, imagemValida, TOKEN_RE, MAX_IMG } from "../api/_produtos";
 import usersHandler from "../api/users";
 import { precoDeTexto } from "../src/shared";
 import { readFileSync, readdirSync } from "node:fs";
@@ -108,13 +108,13 @@ await ta("link de item interno abre SEM login", async () => {
   const ctx = await vitrine();
   const r = await get(ctx, null, { link: ctx.tok[ctx.c2] });
   eq(r.status, 200);
-  eq(r.body.item, { tipo: "combo", nome: "Prêmio do Sorteio", descricao: "", preco: 0, link: "", precoOriginal: 497, desconto: 100,
+  eq(r.body.item, { tipo: "combo", nome: "Prêmio do Sorteio", descricao: "", preco: 0, link: "", imagem: null, precoOriginal: 497, desconto: 100,
     itens: [{ nome: "Curso Price Action", descricao: "Do zero ao avançado.", preco: 497 }] });
 });
 await ta("link de produto devolve só o produto, sem token nem marcações", async () => {
   const ctx = await vitrine();
   const r = await get(ctx, null, { link: ctx.tok[ctx.p2] });
-  eq(r.body.item, { tipo: "produto", nome: "Mentoria VIP", descricao: "", preco: 297, link: "https://pay.example.com/vip" });
+  eq(r.body.item, { tipo: "produto", nome: "Mentoria VIP", descricao: "", preco: 297, link: "https://pay.example.com/vip", imagem: null });
 });
 await ta("token inválido ou desconhecido = 404", async () => {
   const ctx = await vitrine();
@@ -173,6 +173,90 @@ await ta("link com javascript: é recusado no cadastro", async () => {
   const r = await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { nome: "X", preco: 1, link: "javascript:alert(document.cookie)" } });
   eq(r.status, 400);
   contem(r.body.error, "https://");
+});
+
+secao("produtos — imagem");
+// JPEG mínimo de verdade (cabeçalho FFD8) em base64.
+const JPG = "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]).toString("base64");
+const PNG = "data:image/png;base64," + Buffer.from("png-falso").toString("base64");
+const comImagem = async () => {
+  const ctx = await vitrine();
+  for (const [tipo, id] of [["produto", ctx.p1], ["produto", ctx.p2], ["combo", ctx.c2]]) {
+    const atual = (await get(ctx, VICTOR)).body[tipo === "produto" ? "produtos" : "combos"].find(x => x.id === id);
+    const r = await post(ctx, VICTOR, { acao: "salvar", tipo, item: { ...atual, itens: (atual.itens || []).map(x => x.id), imagem: JPG } });
+    if (r.status !== 200) throw new Error(JSON.stringify(r.body));
+  }
+  return ctx;
+};
+const img = (ctx, session, id, extra = {}) => chamar(handler, { method: "GET", session, redis: ctx.redis, query: { img: id, v: "1", ...extra } });
+t("aceita só JPG/PNG/WebP em base64, até o limite; SVG nunca", () => {
+  ehVerdade(imagemValida(JPG)); ehVerdade(imagemValida(PNG));
+  ehVerdade(imagemValida("data:image/webp;base64,UklGRg=="));
+  for (const v of ["data:image/svg+xml;base64,PHN2Zz4=", "https://x.com/a.jpg", "data:text/html;base64,PGI+", "data:image/jpeg;base64,não-é-base64!", "", null, 42,
+    "data:image/jpeg;base64," + "A".repeat(MAX_IMG)]) ehFalso(imagemValida(v), String(v).slice(0, 40));
+});
+await ta("salvar com imagem: grava fora da vitrine e devolve a URL versionada", async () => {
+  const ctx = await comImagem();
+  const p = (await get(ctx, CLI)).body.produtos.find(x => x.id === ctx.p1);
+  ehVerdade(/^\/api\/produtos\?img=p_[0-9a-f]+&v=\d+$/.test(p.imagem), p.imagem);
+  eq(await ctx.redis.get("forcehub:produtos:img:" + ctx.p1), JPG);
+  ehFalso(JSON.stringify(await ctx.redis.get("forcehub:produtos")).includes("base64"), "a imagem não pode morar no doc da vitrine");
+});
+await ta("a imagem sai como arquivo, com tipo certo e cache só no navegador", async () => {
+  const ctx = await comImagem();
+  const r = await img(ctx, CLI, ctx.p1);
+  eq(r.status, 200);
+  eq(r.headers["content-type"], "image/jpeg");
+  contem(r.headers["cache-control"], "private");
+  eq(r.headers["x-content-type-options"], "nosniff");
+  eq([...r.raw.subarray(0, 2)], [0xff, 0xd8]);
+});
+await ta("item interno: cliente não vê a imagem; equipe vê; o link da oferta vê sem login", async () => {
+  const ctx = await comImagem();
+  eq((await img(ctx, CLI, ctx.p2)).status, 404);
+  eq((await img(ctx, null, ctx.p2)).status, 404, "sem sessão e sem link");
+  eq((await img(ctx, MOD, ctx.p2)).status, 200);
+  const oferta = await img(ctx, null, ctx.c2, { link: ctx.tok[ctx.c2] });
+  eq(oferta.status, 200);
+  eq(oferta.headers["content-type"], "image/jpeg", "com ?link= tem que vir a IMAGEM, não o JSON da oferta");
+  eq((await img(ctx, null, ctx.c2, { link: ctx.tok[ctx.p1] })).status, 404, "token de outro item não abre esta imagem");
+  eq((await img(ctx, SEM, ctx.p1)).status, 404, "cliente sem o cap");
+});
+await ta("a página de oferta recebe a URL da imagem com o token", async () => {
+  const ctx = await comImagem();
+  const it = (await get(ctx, null, { link: ctx.tok[ctx.c2] })).body.item;
+  ehVerdade(it.imagem.endsWith("&link=" + ctx.tok[ctx.c2]), it.imagem);
+});
+await ta("editar sem mandar imagem mantém; null remove; trocar muda a versão", async () => {
+  const ctx = await comImagem();
+  const atual = () => get(ctx, VICTOR).then(r => r.body.produtos.find(x => x.id === ctx.p1));
+  const a = await atual();
+  await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { id: ctx.p1, nome: "Novo nome", preco: 497 } });
+  eq((await atual()).imagem, a.imagem, "sem o campo, mantém");
+  await new Promise(r => setTimeout(r, 5));
+  await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { id: ctx.p1, nome: "Novo nome", preco: 497, imagem: PNG } });
+  const b = await atual();
+  ehVerdade(b.imagem && b.imagem !== a.imagem, "trocar precisa mudar o v= (senão o navegador mostra a velha do cache)");
+  await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { id: ctx.p1, nome: "Novo nome", preco: 497, imagem: null } });
+  eq((await atual()).imagem, null);
+  eq(await ctx.redis.get("forcehub:produtos:img:" + ctx.p1), null, "a chave da imagem é apagada");
+  eq((await img(ctx, VICTOR, ctx.p1)).status, 404);
+});
+await ta("imagem inválida é recusada e não grava nada", async () => {
+  const ctx = await vitrine();
+  const r = await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { nome: "X", preco: 1, imagem: "data:image/svg+xml;base64,PHN2Zz4=" } });
+  eq(r.status, 400);
+  eq((await get(ctx, VICTOR)).body.produtos.length, 2);
+});
+await ta("excluir o item apaga a imagem junto", async () => {
+  const ctx = await comImagem();
+  eq((await post(ctx, VICTOR, { acao: "excluir", tipo: "combo", id: ctx.c2 })).status, 200);
+  eq(await ctx.redis.get("forcehub:produtos:img:" + ctx.c2), null);
+});
+t("o formulário comprime a imagem no navegador antes de enviar", () => {
+  const src = readFileSync("src/produtos.jsx", "utf8");
+  contem(src, "resizeImage(file, 1200, 0.82)");
+  contem(src, 'accept="image/png,image/jpeg,image/webp"');
 });
 
 secao("produtos — permissão, menu e página pública");

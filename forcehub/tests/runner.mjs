@@ -33,6 +33,9 @@ export function fakeRedis() {
 export function chamar(handler, { method = "GET", query = {}, body = null, session = null, users = null, redis = null } = {}) {
   globalThis.__SESSION__ = session; globalThis.__USERS__ = users || {}; globalThis.__REDIS__ = redis;
   let saida = null;
-  const res = { status(c) { this._c = c; return this; }, json(j) { saida = { status: this._c, body: j }; return this; }, setHeader() {} };
+  const headers = {};
+  // json() para as rotas de dados; end() para as que devolvem arquivo (imagem).
+  const res = { status(c) { this._c = c; return this; }, json(j) { saida = { status: this._c, body: j, headers }; return this; },
+    end(b) { saida = { status: this._c, raw: b, headers }; return this; }, setHeader(k, v) { headers[k.toLowerCase()] = v; } };
   return Promise.resolve(handler({ method, query, body, headers: {} }, res)).then(() => saida);
 }
