@@ -148,6 +148,14 @@ await ta("produtos saem do mais caro para o mais barato (empate: ordem de cadast
   const doc = await ctx.redis.get("forcehub:produtos");
   eq(doc.produtos[0].nome, "Curso Price Action", "ordenar não reescreve o banco");
 });
+await ta("combos também: do mais caro para o mais barato, pelo preço do combo", async () => {
+  const ctx = await vitrine();                    // já tem 597 (público) e 0 (interno)
+  for (const [nome, preco] of [["Combo Básico", 300], ["Combo Black", 900], ["Combo Duplo", 300]]) {
+    eq((await post(ctx, VICTOR, { acao: "salvar", tipo: "combo", item: { nome, preco, itens: [ctx.p1] } })).status, 200);
+  }
+  eq((await get(ctx, VICTOR)).body.combos.map(c => c.nome), ["Combo Black", "Combo Completo", "Combo Básico", "Combo Duplo", "Prêmio do Sorteio"]);
+  eq((await get(ctx, CLI)).body.combos.map(c => c.nome), ["Combo Black", "Combo Completo", "Combo Básico", "Combo Duplo"], "cliente: mesma ordem, sem o interno");
+});
 
 secao("produtos — edição e exclusão");
 await ta("editar mantém id e link; o preço novo muda o 'de' do combo", async () => {
