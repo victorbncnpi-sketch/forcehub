@@ -137,6 +137,18 @@ await ta("passa pelo roteador /api/users?fn=produtos (rewrite /api/produtos)", a
   eq((await chamar(usersHandler, { method: "GET", query: { fn: "produtos" }, session: CLI, redis: ctx.redis })).body.produtos.length, 1);
 });
 
+await ta("produtos saem do mais caro para o mais barato (empate: ordem de cadastro)", async () => {
+  const ctx = await vitrine();                    // já tem 497 e 297 (interno)
+  for (const [nome, preco] of [["Planilha", 97.9], ["Mentoria em grupo", 1297], ["Ebook", 0], ["Planilha Pro", 97.9]]) {
+    eq((await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { nome, preco } })).status, 200);
+  }
+  eq((await get(ctx, VICTOR)).body.produtos.map(p => p.preco), [1297, 497, 297, 97.9, 97.9, 0]);
+  eq((await get(ctx, VICTOR)).body.produtos.slice(3, 5).map(p => p.nome), ["Planilha", "Planilha Pro"]);
+  eq((await get(ctx, CLI)).body.produtos.map(p => p.nome), ["Mentoria em grupo", "Curso Price Action", "Planilha", "Planilha Pro", "Ebook"], "cliente: mesma ordem, sem o interno");
+  const doc = await ctx.redis.get("forcehub:produtos");
+  eq(doc.produtos[0].nome, "Curso Price Action", "ordenar não reescreve o banco");
+});
+
 secao("produtos — edição e exclusão");
 await ta("editar mantém id e link; o preço novo muda o 'de' do combo", async () => {
   const ctx = await vitrine();
