@@ -135,9 +135,9 @@ export function vitrine(doc, { staff = false } = {}) {
     return staff ? { ...base, interno: !!c.interno, token: c.token, criadoEm: c.criadoEm, atualizadoEm: c.atualizadoEm, autor: c.autor } : base;
   };
   const visivel = (x) => staff || !x.interno;
-  // Produtos e combos do mais caro para o mais barato (preço do combo, não o
+  // Produtos e combos do gratuito para o mais caro (preço do combo, não o
   // "de"); mesmo preço fica na ordem de cadastro (sort estável).
-  const porPreco = (a, b) => (b.preco || 0) - (a.preco || 0);
+  const porPreco = (a, b) => (a.preco || 0) - (b.preco || 0);
   return { produtos: produtos.filter(visivel).sort(porPreco).map(prodOut), combos: combos.filter(visivel).sort(porPreco).map(comboOut) };
 }
 

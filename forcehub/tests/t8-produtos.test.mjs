@@ -137,24 +137,24 @@ await ta("passa pelo roteador /api/users?fn=produtos (rewrite /api/produtos)", a
   eq((await chamar(usersHandler, { method: "GET", query: { fn: "produtos" }, session: CLI, redis: ctx.redis })).body.produtos.length, 1);
 });
 
-await ta("produtos saem do mais caro para o mais barato (empate: ordem de cadastro)", async () => {
+await ta("produtos saem do gratuito para o mais caro (empate: ordem de cadastro)", async () => {
   const ctx = await vitrine();                    // já tem 497 e 297 (interno)
   for (const [nome, preco] of [["Planilha", 97.9], ["Mentoria em grupo", 1297], ["Ebook", 0], ["Planilha Pro", 97.9]]) {
     eq((await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { nome, preco } })).status, 200);
   }
-  eq((await get(ctx, VICTOR)).body.produtos.map(p => p.preco), [1297, 497, 297, 97.9, 97.9, 0]);
-  eq((await get(ctx, VICTOR)).body.produtos.slice(3, 5).map(p => p.nome), ["Planilha", "Planilha Pro"]);
-  eq((await get(ctx, CLI)).body.produtos.map(p => p.nome), ["Mentoria em grupo", "Curso Price Action", "Planilha", "Planilha Pro", "Ebook"], "cliente: mesma ordem, sem o interno");
+  eq((await get(ctx, VICTOR)).body.produtos.map(p => p.preco), [0, 97.9, 97.9, 297, 497, 1297]);
+  eq((await get(ctx, VICTOR)).body.produtos.slice(1, 3).map(p => p.nome), ["Planilha", "Planilha Pro"]);
+  eq((await get(ctx, CLI)).body.produtos.map(p => p.nome), ["Ebook", "Planilha", "Planilha Pro", "Curso Price Action", "Mentoria em grupo"], "cliente: mesma ordem, sem o interno");
   const doc = await ctx.redis.get("forcehub:produtos");
   eq(doc.produtos[0].nome, "Curso Price Action", "ordenar não reescreve o banco");
 });
-await ta("combos também: do mais caro para o mais barato, pelo preço do combo", async () => {
+await ta("combos também: do gratuito para o mais caro, pelo preço do combo", async () => {
   const ctx = await vitrine();                    // já tem 597 (público) e 0 (interno)
   for (const [nome, preco] of [["Combo Básico", 300], ["Combo Black", 900], ["Combo Duplo", 300]]) {
     eq((await post(ctx, VICTOR, { acao: "salvar", tipo: "combo", item: { nome, preco, itens: [ctx.p1] } })).status, 200);
   }
-  eq((await get(ctx, VICTOR)).body.combos.map(c => c.nome), ["Combo Black", "Combo Completo", "Combo Básico", "Combo Duplo", "Prêmio do Sorteio"]);
-  eq((await get(ctx, CLI)).body.combos.map(c => c.nome), ["Combo Black", "Combo Completo", "Combo Básico", "Combo Duplo"], "cliente: mesma ordem, sem o interno");
+  eq((await get(ctx, VICTOR)).body.combos.map(c => c.nome), ["Prêmio do Sorteio", "Combo Básico", "Combo Duplo", "Combo Completo", "Combo Black"]);
+  eq((await get(ctx, CLI)).body.combos.map(c => c.nome), ["Combo Básico", "Combo Duplo", "Combo Completo", "Combo Black"], "cliente: mesma ordem, sem o interno");
 });
 
 secao("produtos — edição e exclusão");
