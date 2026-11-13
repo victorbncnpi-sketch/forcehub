@@ -26,7 +26,8 @@ export function fakeRedis() {
   const db = new Map(); const stats = { get: 0, set: 0, del: 0 };
   return { _db: db, _stats: stats,
     get: async k => { stats.get++; return db.has(k) ? JSON.parse(db.get(k)) : null; },
-    set: async (k, v) => { stats.set++; db.set(k, JSON.stringify(v)); },
+    // Como o Upstash: "OK" quando grava; com { nx: true }, null se a chave já existe.
+    set: async (k, v, o) => { stats.set++; if (o && o.nx && db.has(k)) return null; db.set(k, JSON.stringify(v)); return "OK"; },
     del: async k => { stats.del++; db.delete(k); } };
 }
 // req/res falsos no formato que a Vercel entrega.

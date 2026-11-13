@@ -33,6 +33,7 @@ import { getSession, sessionCan, isStaff } from "./_auth";
 
 const KEY = "forcehub:produtos";
 const IMG_KEY = (id) => "forcehub:produtos:img:" + id;
+const LOCK_KEY = "forcehub:produtos:lock";
 export const MAX_IMG = 900 * 1024;   // data URL; ~900KB, margem sob o limite do Upstash
 export const LIMITES = { nome: 120, descricao: 2000, link: 500, produtos: 200, combos: 100 };
 const PRECO_MAX = 1e6;
@@ -46,7 +47,9 @@ const texto = (v, max) => String(v == null ? "" : v).replace(/[\u0000-\u0009\u00
 
 // Preço em reais: número finito entre 0 e 1 milhão, com 2 casas. 0 = grátis.
 export function precoValido(v) {
-  if (v == null || v === "" || typeof v === "boolean") return null;
+  // Só número ou texto decimal simples ("97.9"): Number() aceitaria " ", "0x10" e [5].
+  if (typeof v === "string") { v = v.trim(); if (!/^\d+(\.\d+)?$/.test(v)) return null; }
+  else if (typeof v !== "number") return null;
   const n = Number(v);
   if (!isFinite(n) || n < 0 || n > PRECO_MAX) return null;
   return Math.round(n * 100) / 100;
@@ -263,13 +266,25 @@ export default async function handler(req, res) {
       if (!staff) return res.status(403).json({ ok: false, error: "Apenas o Victor e os moderadores cadastram produtos." });
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
-      const r = aplicar(await redis.get(KEY), body, sess.name || sess.user);
-      if (r.erro) return res.status(r.status || 400).json({ ok: false, error: r.erro });
-      // Imagem nova antes do doc: o doc nunca aponta para uma imagem que não existe.
-      if (r.imagem && r.imagem.dados) await redis.set(IMG_KEY(r.imagem.id), r.imagem.dados);
-      await redis.set(KEY, r.doc);
-      if (r.imagem && r.imagem.apagar) await redis.del(IMG_KEY(r.imagem.id));
-      return res.status(200).json({ ok: true, staff, id: r.id, ...vitrine(r.doc, { staff }) });
+      // Ler-alterar-gravar sob trava curta: dois moderadores salvando juntos não
+      // podem perder a alteração um do outro (nem ressuscitar item excluído).
+      let trava = null;
+      for (let i = 0; i < 12 && !trava; i++) {
+        trava = await redis.set(LOCK_KEY, Date.now(), { nx: true, px: 8000 });
+        if (!trava) await new Promise(r => setTimeout(r, 250));
+      }
+      if (!trava) return res.status(409).json({ ok: false, error: "Outra alteração está sendo salva agora — tente de novo em instantes." });
+      try {
+        const r = aplicar(await redis.get(KEY), body, sess.name || sess.user);
+        if (r.erro) return res.status(r.status || 400).json({ ok: false, error: r.erro });
+        // Imagem nova antes do doc: o doc nunca aponta para uma imagem que não existe.
+        if (r.imagem && r.imagem.dados) await redis.set(IMG_KEY(r.imagem.id), r.imagem.dados);
+        await redis.set(KEY, r.doc);
+        if (r.imagem && r.imagem.apagar) await redis.del(IMG_KEY(r.imagem.id));
+        return res.status(200).json({ ok: true, staff, id: r.id, ...vitrine(r.doc, { staff }) });
+      } finally {
+        try { await redis.del(LOCK_KEY); } catch (_) {}
+      }
     }
 
     return res.status(405).json({ ok: false, error: "Método não permitido" });

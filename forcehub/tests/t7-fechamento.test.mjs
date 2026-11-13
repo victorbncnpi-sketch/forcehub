@@ -83,8 +83,16 @@ t("3 maiores altas e 3 maiores baixas, em ordem", () => {
 });
 t("fica de fora: abaixo de R$ 1, sem negócio, fracionário, repetido e sem variação", () => {
   const d = escolherDestaques([s("PENY3", 40, 0.4), s("PARA3", 30, 10, 0), s("PETR4F", 20), s("OK3", 2), s("OK3", 9), s("NAN3", null), s("X3", -1)]);
-  eq(d.altas.map(x => x.ticker), ["OK3", "X3"]);
-  eq(d.baixas.map(x => x.ticker), [], "universo pequeno: ninguém aparece nas duas listas");
+  eq(d.altas.map(x => x.ticker), ["OK3"]);
+  eq(d.baixas.map(x => x.ticker), ["X3"]);
+});
+t("dia de alta geral: 'maiores baixas' não lista ação que subiu (e vice-versa)", () => {
+  const sobe = escolherDestaques([s("A3", 4), s("B3", 3), s("C3", 2), s("D3", 1), s("E3", 0.5), s("F3", -0.3)]);
+  eq(sobe.altas.map(x => x.ticker), ["A3", "B3", "C3"]);
+  eq(sobe.baixas.map(x => x.ticker), ["F3"], "só a que caiu");
+  const cai = escolherDestaques([s("A3", -4), s("B3", -3), s("C3", 0.2), s("D3", 0)]);
+  eq(cai.altas.map(x => x.ticker), ["C3"], "0% não é alta");
+  eq(cai.baixas.map(x => x.ticker), ["A3", "B3"]);
 });
 t("lista vazia ou nula não quebra", () => {
   eq(escolherDestaques([]), { altas: [], baixas: [] });
@@ -219,6 +227,23 @@ await ta("outro acesso gerando agora: responde 'gerando' sem gerar em dobro", as
   const r = await obterFechamento(redis, { agora: DEPOIS, fontes: f });
   ehVerdade(r.gerando);
   eq(f.chamadas.ibov, 0);
+});
+await ta("'Refazer' da equipe durante o pregão é recusado: não grava retrato intradiário como fechamento", async () => {
+  const redis = fakeRedis(); const f = fontes({ pregao: "2026-10-14" });
+  const r = await obterFechamento(redis, { agora: brt("2026-10-14", "11:00"), forcar: true, fontes: f });
+  contem(r.erro, "Pregão em andamento");
+  eq(f.chamadas.ibov, 0, "nem consulta a fonte");
+  eq(await redis.get("forcehub:fechamento:2026-10-14"), null);
+  // à noite o fechamento de verdade sai normalmente
+  const n = await obterFechamento(redis, { agora: brt("2026-10-14", "19:30"), fontes: fontes({ pregao: "2026-10-14" }) });
+  eq(n.fechamento.data, "2026-10-14"); ehVerdade(n.fechamento.completo);
+});
+await ta("acessos simultâneos às 18h31: só um gera (trava atômica), os outros esperam", async () => {
+  const redis = fakeRedis(); const f = fontes();
+  const rs = await Promise.all([1, 2, 3].map(() => obterFechamento(redis, { agora: DEPOIS, fontes: f })));
+  eq(f.chamadas.ia, 1, "uma chamada à IA");
+  eq(rs.filter(r => r.gerando).length, 2);
+  eq((await redis.get("forcehub:fechamento:2026-10-13")).tentativas, 1);
 });
 await ta("trava esquecida (processo morto) expira e não bloqueia para sempre", async () => {
   const redis = fakeRedis(); const f = fontes();

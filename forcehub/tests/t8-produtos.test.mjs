@@ -12,7 +12,8 @@ const SEM = { user: "cliente2", name: "Cliente 2", role: "client", perms: ["pano
 secao("produtos — validação");
 t("preço: de 0 a 1 milhão, 2 casas; o resto é recusado", () => {
   eq(precoValido(0), 0); eq(precoValido(497), 497); eq(precoValido(97.999), 98); eq(precoValido("97.9"), 97.9);
-  for (const v of [-1, NaN, Infinity, 1e7, true, "", null, undefined, "abc"]) eq(precoValido(v), null, String(v));
+  for (const v of [-1, NaN, Infinity, 1e7, true, "", null, undefined, "abc", " ", "0x10", "1e3", [5], {}]) eq(precoValido(v), null, JSON.stringify(v) || String(v));
+  eq(precoValido(" 97.90 "), 97.9);
 });
 t("link: vazio vale; preenchido só http(s) — javascript: nunca vira href", () => {
   eq(linkValido(""), ""); eq(linkValido(null), "");
@@ -316,6 +317,22 @@ t("rewrite /api/produtos e continua no teto de 12 funções", () => {
   const v = JSON.parse(readFileSync("vercel.json", "utf8"));
   ehVerdade(v.rewrites.some(r => r.source === "/api/produtos" && r.destination === "/api/users?fn=produtos"));
   eq(readdirSync("api").filter(f => f.endsWith(".js") && !f.startsWith("_")).length, 12);
+});
+
+await ta("dois moderadores salvando ao mesmo tempo: nenhuma alteração se perde", async () => {
+  const ctx = await vitrine();
+  const novos = ["A", "B", "C", "D"].map(n => ({ acao: "salvar", tipo: "produto", item: { nome: "Produto " + n, preco: 10 } }));
+  const rs = await Promise.all(novos.map((b, i) => post(ctx, i % 2 ? MOD : VICTOR, b)));
+  eq(rs.map(r => r.status), [200, 200, 200, 200]);
+  const nomes = (await get(ctx, VICTOR)).body.produtos.map(p => p.nome);
+  for (const n of ["A", "B", "C", "D"]) ehVerdade(nomes.includes("Produto " + n), "sumiu o Produto " + n);
+  eq(await ctx.redis.get("forcehub:produtos:lock"), null, "trava liberada");
+});
+await ta("trava ocupada por muito tempo: responde 409 em vez de sobrescrever", async () => {
+  const ctx = await vitrine();
+  await ctx.redis.set("forcehub:produtos:lock", Date.now());
+  const r = await post(ctx, VICTOR, { acao: "salvar", tipo: "produto", item: { nome: "X", preco: 1 } });
+  eq(r.status, 409); contem(r.body.error, "tente de novo");
 });
 
 })();

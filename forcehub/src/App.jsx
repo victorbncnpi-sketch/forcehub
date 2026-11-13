@@ -742,6 +742,7 @@ function AnaliseModal({ ativo, label, data, canWrite, onClose, onSaved }) {
 // por pregão no backend (api/_fechamento.js) e compartilhado: a tela só lê. O
 // botão usa a leitura leve (não dispara geração); o modal pede o completo, que
 // gera o do dia se ele ainda faltar depois das 18h30.
+const FECH_MAX_TENT = 8; // = MAX_TENT de api/_fechamento.js: depois disso não há nova tentativa
 const FECH_ATIVOS = [["IBOV", "Ibovespa"], ["WIN", "Mini Índice"], ["WDO", "Mini Dólar"]];
 const fechNum = (k, v) => v == null ? "—" : Number(v).toLocaleString("pt-BR", { minimumFractionDigits: k === "WDO" ? 1 : 0, maximumFractionDigits: k === "WDO" ? 1 : 0 });
 const fechVar = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
@@ -874,7 +875,7 @@ function FechamentoModal({ session, onClose, onLoaded }) {
       ) : !f ? (
         <EmptyState icon="🔔" title="Ainda não há fechamento"
           desc={erro ? erro : fase && fase.emPregao ? "O fechamento de hoje sai depois das 18h30, quando o pregão encerra." : "O fechamento ainda não foi gerado. Tente de novo em alguns minutos."}>
-          {staff && <Button size="sm" onClick={refazer} disabled={refazendo}>{refazendo ? "⟳ Gerando..." : "Gerar agora"}</Button>}
+          {staff && !(fase && fase.emPregao) && <Button size="sm" onClick={refazer} disabled={refazendo}>{refazendo ? "⟳ Gerando..." : "Gerar agora"}</Button>}
         </EmptyState>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -883,12 +884,15 @@ function FechamentoModal({ session, onClose, onLoaded }) {
               <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>Pregão de {fechDataLonga(f.data)}</div>
               <div style={{ fontSize: 12, color: T.dim, marginTop: 3 }}>Gerado às {fmtTime(f.generatedAt)}{f.completo ? "" : " · parcial"}</div>
             </div>
-            {staff && <Button variant="ghost" size="sm" onClick={refazer} disabled={refazendo}>{refazendo ? "⟳ Refazendo..." : "↻ Refazer agora"}</Button>}
+            {/* Durante o pregão o servidor recusa: um retrato intradiário não é fechamento. */}
+            {staff && !(fase && fase.emPregao) && <Button variant="ghost" size="sm" onClick={refazer} disabled={refazendo}>{refazendo ? "⟳ Refazendo..." : "↻ Refazer agora"}</Button>}
           </div>
 
           {fase && fase.emPregao && <Banner tone="blue">Pregão em andamento: o fechamento de hoje sai depois das 18h30. Abaixo, o do último pregão.</Banner>}
           {info.gerando && <Banner tone="blue">O fechamento mais recente está sendo gerado agora — esta janela atualiza sozinha.</Banner>}
-          {!f.completo && !info.gerando && <Banner tone="gold">Parte dos dados ainda não foi publicada pela fonte (os futuros saem à noite). O fechamento é completado automaticamente.</Banner>}
+          {!f.completo && !info.gerando && <Banner tone="gold">{(f.tentativas || 0) < FECH_MAX_TENT
+            ? "Parte dos dados ainda não foi publicada pela fonte (os futuros saem à noite). O fechamento é completado automaticamente."
+            : "Parte dos dados não foi publicada pela fonte neste pregão — o que faltou fica indicado abaixo."}</Banner>}
           {erro && <Banner tone="red">{erro}</Banner>}
 
           <div>

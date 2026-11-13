@@ -155,9 +155,11 @@ export function escolherDestaques(stocks, n = 3) {
     vistos.add(ticker);
     ok.push({ ticker, nome: String(s.name || "").trim(), preco: +preco.toFixed(2), varPct: +varPct.toFixed(2) });
   }
+  // Alta só com variação positiva e baixa só com negativa: num dia em que quase
+  // tudo subiu, "maiores baixas" não pode listar ação que fechou no azul.
   const ord = ok.sort((a, b) => b.varPct - a.varPct);
-  const altas = ord.slice(0, n);
-  const baixas = ord.slice().reverse().filter(x => !altas.includes(x)).slice(0, n);
+  const altas = ord.filter(x => x.varPct > 0).slice(0, n);
+  const baixas = ord.slice().reverse().filter(x => x.varPct < 0 && !altas.includes(x)).slice(0, n);
   return { altas, baixas };
 }
 
@@ -291,15 +293,21 @@ export async function obterFechamento(redis, { forcar = false, agora = new Date(
   const atual = await lerUltimo(redis);
   const base = { fechamento: atual, fase };
   const t = agora.getTime();
+  // Durante o pregão nem o "Refazer" da equipe gera: a cotação já é de hoje e
+  // um retrato intradiário ficaria gravado (e "completo") como o fechamento.
+  if (fase.emPregao) return forcar ? { ...base, erro: "Pregão em andamento: o fechamento de hoje só pode ser gerado depois das 18h30." } : base;
   if (!forcar) {
-    if (fase.emPregao) return base;
     if (atual && atual.data >= fase.alvo && (atual.completo || (atual.tentativas || 0) >= MAX_TENT)) return base;
     const ult = Number(await redis.get(KEY_TENT)) || 0;
     if (ult && t - ult < ESPERA_MS) return base;
   }
-  const lock = Number(await redis.get(KEY_LOCK)) || 0;
-  if (lock && t - lock < LOCK_MS) return { ...base, gerando: true };
-  await redis.set(KEY_LOCK, t, { ex: 300 });
+  // Trava atômica (SET NX): vários acessos às 18h31, ou o cron junto com um
+  // usuário, não podem disparar várias gerações (e várias chamadas à IA).
+  if (!(await redis.set(KEY_LOCK, t, { nx: true, px: LOCK_MS }))) {
+    const lock = Number(await redis.get(KEY_LOCK)) || 0;
+    if (lock && t - lock < LOCK_MS) return { ...base, gerando: true };
+    await redis.set(KEY_LOCK, t, { px: LOCK_MS }); // trava velha sem expiração
+  }
   await redis.set(KEY_TENT, t, { ex: 3600 });
   try {
     const novo = await gerarFechamento(redis, { forcar, fontes });

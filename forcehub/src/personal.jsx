@@ -887,31 +887,53 @@ function ProjecaoTab({ jornada }) {
 // envio. "Saiu do plano" é só VIOLAÇÃO de regra; faixa de alvo/stop é
 // "perto do limite" — não bater o alvo do dia nunca é erro (ver o Quadro).
 const LINHAS_DO_DIA = ["pontos_alvo", "pontos_stop", "prejuizo_diario"];
-function resumoDoDia(jornada, hoje) {
+// Sem pregão (fim de semana) ou antes da abertura, "não enviou hoje" não faz
+// sentido: o resumo fala do último dia enviado. `agora` = { hoje, dow, min } em BRT.
+function agoraBRT(d = new Date()) {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d)) p[x.type] = x.value;
+  const hoje = `${p.year}-${p.month}-${p.day}`;
+  return { hoje, dow: new Date(hoje + "T12:00:00Z").getUTCDay(), min: (+p.hour) * 60 + (+p.minute) };
+}
+function resumoDoDia(jornada, agora) {
+  const { hoje, dow, min } = agora;
   const st = jornada.ciclo && jornada.ciclo.status;
   if (st === "concluido") return { tom: "green", titulo: "Seu ciclo terminou 🎉", texto: "Veja abaixo o relatório final com a sua evolução nesses dias." };
   if (st === "pausado") return { tom: "gold", titulo: "Seu ciclo está pausado", texto: "Fale com o mentor para combinar a volta." };
-  const env = (jornada.envios || []).find(e => e.data === hoje);
-  if (!env) return { tom: "neutro", titulo: "Você ainda não enviou o dia de hoje", texto: "Operou hoje? Envie em 3 passos. Não operou? Não precisa enviar — o ciclo só conta os dias operados.", acao: "enviar" };
+  const envios = jornada.envios || [];
+  let env = envios.find(e => e.data === hoje);
+  const semPregao = dow === 0 || dow === 6;
+  if (!env) {
+    const ultimo = envios.filter(e => e.data < hoje).sort((a, b) => (a.data < b.data ? 1 : -1))[0];
+    if (semPregao || min < 9 * 60) {
+      if (!ultimo) return semPregao
+        ? { tom: "neutro", titulo: "Hoje não tem pregão", texto: "No próximo dia em que operar, envie o dia aqui em 3 passos." }
+        : { tom: "neutro", titulo: "Bom pregão!", texto: "Operou hoje? Depois do pregão, envie o dia aqui em 3 passos." };
+      env = ultimo;
+    } else {
+      return { tom: "neutro", titulo: "Você ainda não enviou o dia de hoje", texto: "Operou hoje? Envie em 3 passos. Não operou? Não precisa enviar — o ciclo só conta os dias operados.", acao: "enviar" };
+    }
+  }
+  const quando = env.data === hoje ? "Hoje" : "Em " + dm(env.data);
   const regras = [...new Set((env.violacoes || []).map(v => TIPO_LABEL[v.tipo] || v.tipo))];
   const perto = (env.quadro || []).filter(l => LINHAS_DO_DIA.includes(l.chave) && (l.status === "atencao" || l.status === "fora")).map(l => l.label.replace(/\s*\(.*\)/, "").toLowerCase());
   const d = env.dia || {};
-  const r = { resultado: d.resultado, ops: d.ops };
+  const r = { resultado: d.resultado, ops: d.ops, data: env.data === hoje ? null : env.data };
   if (env.feedback) r.proximo = env.feedback.lido ? "O mentor já analisou este dia." : "O mentor já respondeu este dia — leia na aba Feedback.";
   else r.proximo = "Agora é com o mentor: o feedback aparece na aba Feedback.";
-  if (regras.length) return { ...r, tom: "red", titulo: "Hoje você saiu do plano", texto: "Regra quebrada: " + regras.join(", ").toLowerCase() + ". Releia o seu plano antes do próximo pregão." };
-  if (perto.length) return { ...r, tom: "gold", titulo: "Você seguiu as regras, mas chegou perto do limite", texto: "Fique de olho em: " + perto.join(", ") + "." };
-  return { ...r, tom: "green", titulo: d.atingiuAlvo ? "Dentro do plano e alvo do dia batido 🎯" : "Hoje você ficou dentro do plano ✓", texto: "Seguiu as regras combinadas. É exatamente isso que o ciclo mede." };
+  if (regras.length) return { ...r, tom: "red", titulo: quando + " você saiu do plano", texto: "Regra quebrada: " + regras.join(", ").toLowerCase() + ". Releia o seu plano antes do próximo pregão." };
+  if (perto.length) return { ...r, tom: "gold", titulo: (env.data === hoje ? "Você" : quando + " você") + " seguiu as regras, mas chegou perto do limite", texto: "Fique de olho em: " + perto.join(", ") + "." };
+  return { ...r, tom: "green", titulo: d.atingiuAlvo ? (env.data === hoje ? "Dentro" : quando + " você ficou dentro") + " do plano e alvo do dia batido 🎯" : quando + " você ficou dentro do plano ✓", texto: "Seguiu as regras combinadas. É exatamente isso que o ciclo mede." };
 }
 
 const COR_TOM = { green: T.green, gold: T.gold, red: T.red, neutro: T.mut };
 function ResumoDoDia({ jornada, onIr }) {
-  const r = resumoDoDia(jornada, hojeISO());
+  const r = resumoDoDia(jornada, agoraBRT());
   const c = COR_TOM[r.tom] || T.mut;
   return (
     <Card style={{ padding: "15px 18px", borderColor: r.tom === "neutro" ? T.line : c + "66", borderLeft: "3px solid " + c, display: "flex", gap: 14, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
       <div style={{ minWidth: 0, flex: "1 1 280px" }}>
-        <div style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 4 }}>Seu dia</div>
+        <div style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 4 }}>{r.data ? "Seu último dia · " + dm(r.data) : "Seu dia"}</div>
         <div style={{ fontSize: 16, fontWeight: 700, color: r.tom === "neutro" ? T.text : c }}>{r.titulo}</div>
         <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.55, marginTop: 4 }}>{r.texto}</div>
         {r.proximo && <div style={{ fontSize: 12.5, color: T.dim, marginTop: 6 }}>{r.proximo}</div>}
@@ -949,6 +971,10 @@ function PersonalAluno({ session }) {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [aba, setAba] = useState("enviar");
+  // Botões do topo ("Enviar o dia", "Ler feedback") trocam a aba E levam até
+  // ela: no celular as abas ficam bem abaixo, e a troca passava despercebida.
+  const abasRef = useRef(null);
+  const irPara = (k) => { setAba(k); setTimeout(() => { if (abasRef.current) abasRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); }, 0); };
 
   const carregar = async () => {
     try { const j = await api.get("/api/personal"); setJornada(j); setErro(""); }
@@ -976,13 +1002,13 @@ function PersonalAluno({ session }) {
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <AvisoFeedback envios={jornada.envios} onLer={() => setAba("feedback")} />
-      <ResumoDoDia jornada={jornada} onIr={setAba} />
+      <AvisoFeedback envios={jornada.envios} onLer={() => irPara("feedback")} />
+      <ResumoDoDia jornada={jornada} onIr={irPara} />
       <BarraCiclo diaAtual={jornada.real.diasOperados} diasPrevistos={jornada.ciclo.diasPrevistos} status={jornada.ciclo.status} />
       <QuadroGerenciamento linhas={jornada.quadro} data={jornada.quadroData} />
       <Alertas itens={jornada.alertas} titulo="Fique de olho" aluno />
       {jornada.ciclo.status === "concluido" && <RelatorioFinal jornada={jornada} />}
-      <Tabs items={abas} value={aba} onChange={setAba} />
+      <div ref={abasRef} style={{ scrollMarginTop: 12 }}><Tabs items={abas} value={aba} onChange={setAba} /></div>
       {aba === "enviar" && <EnviarDia plano={jornada.plano} jornada={jornada} onEnviado={carregar} />}
       {aba === "feedback" && <FeedbackTab jornada={jornada} onMudou={carregar} />}
       {aba === "projecao" && <ProjecaoTab jornada={jornada} />}

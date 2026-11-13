@@ -20,7 +20,7 @@ const linkDaOferta = (token) => window.location.origin + "/?oferta=" + encodeURI
 
 async function copiar(txt) {
   try { await navigator.clipboard.writeText(txt); return true; }
-  catch (e) { window.prompt("Copie o link:", txt); return false; }
+  catch (e) { window.prompt("Copie o link:", txt); return false; } // sem "Copiado!": quem copiou foi a pessoa
 }
 
 // Botão de compra: <a> com cara de botão primário (abre o checkout em outra aba).
@@ -109,7 +109,7 @@ function ItemCard({ item, combo, staff, copiado, onEditar, onCopiar, onNovoLink,
 
 const fmtCampo = (v) => v == null ? "" : Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
+function ItemForm({ tipo, item, produtos, combos = [], onClose, onSalvar }) {
   const combo = tipo === "combo";
   const [f, setF] = useState(() => ({
     nome: (item && item.nome) || "", descricao: (item && item.descricao) || "",
@@ -142,6 +142,9 @@ function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
   const soma = escolhidos.reduce((s, p) => s + (p.preco || 0), 0);
   const desconto = combo && preco != null && soma > 0 && preco < soma ? Math.round((1 - preco / soma) * 100) : 0;
   const internoNoPublico = combo && !f.interno && escolhidos.some(p => p.interno);
+  // O inverso: produto que vira interno mas já está num combo público continua
+  // aparecendo (nome e preço) para os clientes dentro desse combo.
+  const combosPublicos = !combo && f.interno && item && item.id ? combos.filter(c => !c.interno && (c.itens || []).some(x => x.id === item.id)).map(c => "“" + c.nome + "”") : [];
   const alternar = (id) => set("itens", f.itens.includes(id) ? f.itens.filter(x => x !== id) : [...f.itens, id]);
 
   const salvar = async () => {
@@ -224,6 +227,7 @@ function ItemForm({ tipo, item, produtos, onClose, onSalvar }) {
           </span>
         </label>
 
+        {combosPublicos.length > 0 && <Banner tone="gold">Este produto está no combo público {combosPublicos.join(", ")}: dentro dele, o nome e o preço continuam visíveis para os clientes.</Banner>}
         {internoNoPublico && <Banner tone="gold">Este combo é público e inclui item interno: o nome e o preço desse item ficarão visíveis para os clientes dentro do combo.</Banner>}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
@@ -267,7 +271,7 @@ export default function ProdutosScreen() {
     setForm(null);
     setAviso(item.id ? "Alterações salvas." : (tipo === "combo" ? "Combo criado." : "Produto criado.") + (item.interno ? " É interno: use “Copiar link” para enviar." : ""));
   };
-  const copiarLink = async (it) => { await copiar(linkDaOferta(it.token)); setCopiado(it.id); setTimeout(() => setCopiado(c => c === it.id ? null : c), 2000); };
+  const copiarLink = async (it) => { if (!(await copiar(linkDaOferta(it.token)))) return; setCopiado(it.id); setTimeout(() => setCopiado(c => c === it.id ? null : c), 2000); };
   const novoLink = async (tipo, it) => {
     const ok = await confirmDialog({ title: "Gerar um novo link?", message: "O link atual de “" + it.nome + "” deixa de funcionar. Quem já recebeu precisará do novo.", confirmLabel: "Gerar novo link" });
     if (!ok) return;
@@ -326,7 +330,7 @@ export default function ProdutosScreen() {
       {produtos.length > 0 && <Secao titulo="Produtos">{produtos.map(card("produto"))}</Secao>}
 
       {form && (
-        <ItemForm tipo={form.tipo} item={form.item} produtos={produtos}
+        <ItemForm tipo={form.tipo} item={form.item} produtos={produtos} combos={combos}
           onClose={() => setForm(null)} onSalvar={salvar(form.tipo)} />
       )}
     </div>
