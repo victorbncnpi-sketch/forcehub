@@ -73,7 +73,23 @@ function QuadroGerenciamento({ linhas, data, compacto }) {
           ))}
         </div>
       </div>
+      <LegendaSemaforo />
     </Card>
+  );
+}
+
+// Legenda das cores, escrita na tela: o significado no `title` do ponto só
+// aparece passando o mouse — no celular, nunca.
+const LEGENDA = [["ok", "dentro do combinado"], ["atencao", "perto do limite"], ["fora", "fora do combinado"], ["neutro", "sem dado no dia"]];
+function LegendaSemaforo() {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", padding: "9px 16px", fontSize: 11.5, color: T.dim }}>
+      {LEGENDA.map(([n, txt]) => (
+        <span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Semaforo nivel={n} size={8} /><span><b style={{ color: T.mut, fontWeight: 600 }}>{LABEL_NIVEL[n]}</b> — {txt}</span>
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -102,7 +118,9 @@ function BarraCiclo({ diaAtual, diasPrevistos, status }) {
   );
 }
 
-function Alertas({ itens, titulo = "Alertas" }) {
+// `aluno`: mostra a `orientacao` (conselho, em linguagem simples) no lugar do
+// texto técnico que o mentor lê. Ver alertasDoAluno em api/_pt-regras.js.
+function Alertas({ itens, titulo = "Alertas", aluno }) {
   if (!itens || !itens.length) return null;
   return (
     <Card style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -110,7 +128,7 @@ function Alertas({ itens, titulo = "Alertas" }) {
       {itens.map((a, i) => (
         <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start", fontSize: 13, color: T.mut }}>
           <span style={{ color: a.tom === "red" ? T.red : a.tom === "blue" ? T.blue : T.gold, display: "flex", marginTop: 1 }}><Icon name="alert" size={14} /></span>
-          <span>{a.texto}</span>
+          <span style={{ lineHeight: 1.55 }}>{aluno && a.orientacao ? a.orientacao : a.texto}</span>
         </div>
       ))}
     </Card>
@@ -392,6 +410,45 @@ const FONTES = [
   { k: "manual", label: "Digitar", dica: "Lançar as operações uma a uma." },
 ];
 
+// Envio em passos numerados: o aluno leigo sabe sempre onde está e o que falta.
+function Passo({ n, titulo, desc, children }) {
+  return (
+    <div style={{ display: "flex", gap: 14 }}>
+      <span style={{ width: 28, height: 28, borderRadius: "50%", background: T.goldSoft, border: "1px solid " + T.lineGold, color: T.gold, fontWeight: 800, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: T.mono }}>{n}</span>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{titulo}</div>
+          {desc && <div style={{ fontSize: 12.5, color: T.dim, marginTop: 2 }}>{desc}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Mini-tutorial do CSV — é onde o leigo mais trava. Os nomes dos relatórios
+// são os dois que o leitor do Profit aceita (ver parseProfitCsv em shared.js).
+function ComoExportarCsv() {
+  const [aberto, setAberto] = useState(false);
+  return (
+    <div style={{ border: "1px solid " + T.line, borderRadius: 10, background: T.inset }}>
+      <button className="fh-btn" onClick={() => setAberto(a => !a)} aria-expanded={aberto}
+        style={{ width: "100%", justifyContent: "space-between", background: "transparent", border: "none", color: T.mut, padding: "10px 14px", fontSize: 13 }}>
+        <span>❓ Como exportar o CSV do Profit?</span><span style={{ color: T.dim }}>{aberto ? "▲" : "▼"}</span>
+      </button>
+      {aberto && (
+        <ol style={{ margin: 0, padding: "0 18px 14px 34px", fontSize: 13, color: T.mut, lineHeight: 1.7 }}>
+          <li>No Profit, abra o <b style={{ color: T.text }}>Relatório de Operações</b> (o <b style={{ color: T.text }}>Relatório de Performance</b> também serve).</li>
+          <li>Filtre pelo dia que você operou.</li>
+          <li>Exporte o relatório no formato <b style={{ color: T.text }}>CSV (.csv)</b> e salve no computador ou no celular.</li>
+          <li>Volte aqui, toque em <b style={{ color: T.text }}>Escolher arquivo .csv</b> e selecione o arquivo salvo.</li>
+          <li style={{ color: T.dim }}>Sem o arquivo? Use <b>Meu Diário de Trades</b> ou <b>Digitar</b> nas opções acima.</li>
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function EnviarDia({ plano, jornada, onEnviado }) {
   const [data, setData] = useState(hojeISO());
   const [fonte, setFonte] = useState("csv");
@@ -509,7 +566,8 @@ function EnviarDia({ plano, jornada, onEnviado }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 22 }}>
+        <Passo n={1} titulo="Traga as operações do dia" desc="Escolha o dia e de onde vêm as operações.">
         <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
           <Field label="Dia operado" style={{ width: 170 }}>
             <Input type="date" value={data} max={hojeISO()} onChange={e => { setData(e.target.value); setOps([]); setMsg(null); }} />
@@ -528,10 +586,13 @@ function EnviarDia({ plano, jornada, onEnviado }) {
           </div>
           <div style={{ fontSize: 12, color: T.dim, marginBottom: 10 }}>{fonteAtual.dica}</div>
           {fonte === "csv" && (
-            <label className="fh-btn" style={{ display: "inline-flex", padding: "10px 16px", fontSize: 14, borderRadius: 9, border: "1px dashed " + T.line, color: T.mut, cursor: "pointer", gap: 8 }}>
-              <Icon name="upload" size={16} /> Escolher arquivo .csv
-              <input type="file" accept=".csv,text/csv" onChange={lerCsv} style={{ display: "none" }} />
-            </label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+              <label className="fh-btn" style={{ display: "inline-flex", padding: "10px 16px", fontSize: 14, borderRadius: 9, border: "1px dashed " + T.line, color: T.mut, cursor: "pointer", gap: 8 }}>
+                <Icon name="upload" size={16} /> Escolher arquivo .csv
+                <input type="file" accept=".csv,text/csv" onChange={lerCsv} style={{ display: "none" }} />
+              </label>
+              <div style={{ alignSelf: "stretch" }}><ComoExportarCsv /></div>
+            </div>
           )}
           {fonte === "diario" && <Button variant="ghost" size="sm" onClick={puxarDiario}>Puxar operações de {dmy(data)}</Button>}
           {fonte === "manual" && <Button variant="ghost" size="sm" onClick={addOp}>+ Adicionar operação</Button>}
@@ -574,7 +635,10 @@ function EnviarDia({ plano, jornada, onEnviado }) {
           </div>
         )}
 
-        <Field label="Como foi o dia?" hint="Uma ou duas frases. É o que o mentor lê antes de olhar os números.">
+        </Passo>
+
+        <Passo n={2} titulo="Conte como foi o dia" desc="O mentor lê isso antes de olhar os números. Os prints são opcionais.">
+        <Field label="Como foi o dia?" hint="Uma ou duas frases.">
           <textarea className="fh-input" rows={3} value={resumo} maxLength={2000} onChange={e => setResumo(e.target.value)}
             placeholder="Ex.: entrei cedo no rompimento, stopei, e depois forcei uma entrada para recuperar." style={{ resize: "vertical", lineHeight: 1.6 }} />
         </Field>
@@ -602,9 +666,13 @@ function EnviarDia({ plano, jornada, onEnviado }) {
           ))}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <Button onClick={enviar} disabled={enviando}>{enviando ? <><Spinner size={14} /> Enviando...</> : "Enviar para análise"}</Button>
-        </div>
+        </Passo>
+
+        <Passo n={3} titulo="Envie para o mentor" desc="Ele recebe na fila dele e você é avisado aqui quando o feedback sair.">
+          <div>
+            <Button onClick={enviar} disabled={enviando}>{enviando ? <><Spinner size={14} /> Enviando...</> : "Enviar para análise"}</Button>
+          </div>
+        </Passo>
       </Card>
     </div>
   );
@@ -813,6 +881,69 @@ function ProjecaoTab({ jornada }) {
   );
 }
 
+// ─── Resumo do dia (topo da tela do aluno) ───────────────────────────────────
+// Uma frase sobre hoje e o próximo passo, para quem não quer ler o Quadro.
+// Não recalcula nada: lê as violações e o Quadro que o servidor gravou no
+// envio. "Saiu do plano" é só VIOLAÇÃO de regra; faixa de alvo/stop é
+// "perto do limite" — não bater o alvo do dia nunca é erro (ver o Quadro).
+const LINHAS_DO_DIA = ["pontos_alvo", "pontos_stop", "prejuizo_diario"];
+function resumoDoDia(jornada, hoje) {
+  const st = jornada.ciclo && jornada.ciclo.status;
+  if (st === "concluido") return { tom: "green", titulo: "Seu ciclo terminou 🎉", texto: "Veja abaixo o relatório final com a sua evolução nesses dias." };
+  if (st === "pausado") return { tom: "gold", titulo: "Seu ciclo está pausado", texto: "Fale com o mentor para combinar a volta." };
+  const env = (jornada.envios || []).find(e => e.data === hoje);
+  if (!env) return { tom: "neutro", titulo: "Você ainda não enviou o dia de hoje", texto: "Operou hoje? Envie em 3 passos. Não operou? Não precisa enviar — o ciclo só conta os dias operados.", acao: "enviar" };
+  const regras = [...new Set((env.violacoes || []).map(v => TIPO_LABEL[v.tipo] || v.tipo))];
+  const perto = (env.quadro || []).filter(l => LINHAS_DO_DIA.includes(l.chave) && (l.status === "atencao" || l.status === "fora")).map(l => l.label.replace(/\s*\(.*\)/, "").toLowerCase());
+  const d = env.dia || {};
+  const r = { resultado: d.resultado, ops: d.ops };
+  if (env.feedback) r.proximo = env.feedback.lido ? "O mentor já analisou este dia." : "O mentor já respondeu este dia — leia na aba Feedback.";
+  else r.proximo = "Agora é com o mentor: o feedback aparece na aba Feedback.";
+  if (regras.length) return { ...r, tom: "red", titulo: "Hoje você saiu do plano", texto: "Regra quebrada: " + regras.join(", ").toLowerCase() + ". Releia o seu plano antes do próximo pregão." };
+  if (perto.length) return { ...r, tom: "gold", titulo: "Você seguiu as regras, mas chegou perto do limite", texto: "Fique de olho em: " + perto.join(", ") + "." };
+  return { ...r, tom: "green", titulo: d.atingiuAlvo ? "Dentro do plano e alvo do dia batido 🎯" : "Hoje você ficou dentro do plano ✓", texto: "Seguiu as regras combinadas. É exatamente isso que o ciclo mede." };
+}
+
+const COR_TOM = { green: T.green, gold: T.gold, red: T.red, neutro: T.mut };
+function ResumoDoDia({ jornada, onIr }) {
+  const r = resumoDoDia(jornada, hojeISO());
+  const c = COR_TOM[r.tom] || T.mut;
+  return (
+    <Card style={{ padding: "15px 18px", borderColor: r.tom === "neutro" ? T.line : c + "66", borderLeft: "3px solid " + c, display: "flex", gap: 14, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+      <div style={{ minWidth: 0, flex: "1 1 280px" }}>
+        <div style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 4 }}>Seu dia</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: r.tom === "neutro" ? T.text : c }}>{r.titulo}</div>
+        <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.55, marginTop: 4 }}>{r.texto}</div>
+        {r.proximo && <div style={{ fontSize: 12.5, color: T.dim, marginTop: 6 }}>{r.proximo}</div>}
+      </div>
+      {r.resultado != null && (
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 11, color: T.dim }}>Resultado do dia{r.ops ? ` · ${r.ops} operaç${r.ops > 1 ? "ões" : "ão"}` : ""}</div>
+          <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.mono, color: sinal(r.resultado) }}>{BRL(r.resultado)}</div>
+        </div>
+      )}
+      {r.acao === "enviar" && <Button size="sm" onClick={() => onIr("enviar")}>Enviar o dia</Button>}
+    </Card>
+  );
+}
+
+// Feedback novo em destaque: o número na aba passava batido.
+function AvisoFeedback({ envios, onLer }) {
+  const novos = (envios || []).filter(e => e.feedback && !e.feedback.lido).map(e => e.data).sort();
+  if (!novos.length) return null;
+  const datas = novos.map(dm);
+  const txt = novos.length === 1 ? `O mentor respondeu o seu dia ${datas[0]}.`
+    : `O mentor respondeu ${novos.length} dias seus: ${datas.slice(0, -1).join(", ")} e ${datas[datas.length - 1]}.`;
+  return (
+    <Card style={{ padding: "13px 18px", borderColor: T.blue + "66", background: T.blue + "10", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: T.text, fontWeight: 600 }}>
+        <span style={{ fontSize: 18 }}>💬</span>{txt}
+      </span>
+      <Button size="sm" onClick={onLer}>Ler feedback</Button>
+    </Card>
+  );
+}
+
 function PersonalAluno({ session }) {
   const [jornada, setJornada] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -845,9 +976,11 @@ function PersonalAluno({ session }) {
 
   return (
     <div className="fh-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <AvisoFeedback envios={jornada.envios} onLer={() => setAba("feedback")} />
+      <ResumoDoDia jornada={jornada} onIr={setAba} />
       <BarraCiclo diaAtual={jornada.real.diasOperados} diasPrevistos={jornada.ciclo.diasPrevistos} status={jornada.ciclo.status} />
       <QuadroGerenciamento linhas={jornada.quadro} data={jornada.quadroData} />
-      <Alertas itens={jornada.alertas} titulo="Atenção" />
+      <Alertas itens={jornada.alertas} titulo="Fique de olho" aluno />
       {jornada.ciclo.status === "concluido" && <RelatorioFinal jornada={jornada} />}
       <Tabs items={abas} value={aba} onChange={setAba} />
       {aba === "enviar" && <EnviarDia plano={jornada.plano} jornada={jornada} onEnviado={carregar} />}

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { secao, t, eq, ehVerdade, ehFalso, contem, resumo } from "./runner.mjs";
 import { camposCalculados, analisarEnvio, quadroGerenciamento, projecao, comparaProjecao,
          alertasDoAluno, consolidaCiclo, mapaDeTags, projecaoRecalibrada } from "../api/_pt-regras";
@@ -209,6 +210,34 @@ t("datas nos alertas saem em dd/mm/aaaa", () => {
   const a = alertasDoAluno({ status: "ativo" }, [{ ...mkEnvio("2026-09-10", []), status: "analisado" }], "2026-09-20");
   const txt = a.find(x => x.tipo === "sem_envio").texto;
   contem(txt, "10/09/2026"); ehFalso(txt.includes("2026-09-10"), "não pode vazar ISO");
+});
+
+t("todo alerta traz a orientação ao aluno, sem jargão; o mentor mantém o texto técnico", () => {
+  const ruim = { ...mkEnvio("2026-09-10", []), status: "aguardando", quadro: [{ chave: "pontos_stop", label: "Pontos de stop (por operação)", status: "fora" }] };
+  const env = [{ ...envComTilt, status: "analisado", quadro: ruim.quadro }, { ...ruim, data: "2026-09-11" }, { ...ruim, data: "2026-09-12" }];
+  const a = alertasDoAluno({ status: "ativo", drawdownReal: 300, drawdownEsperado: 100 }, env, "2026-09-22");
+  eq(a.map(x => x.tipo).sort(), ["aguardando", "drawdown", "metrica_persistente", "sem_envio", "tilt"]);
+  for (const x of a) {
+    ehVerdade(x.orientacao && x.orientacao !== x.texto, x.tipo + " sem orientação própria");
+    ehFalso(/tilt|drawdown|envio(s)? aguardando/i.test(x.orientacao), x.tipo + " com jargão: " + x.orientacao);
+  }
+  contem(a.find(x => x.tipo === "tilt").texto, "possível tilt", "o mentor continua lendo o termo técnico");
+  contem(a.find(x => x.tipo === "metrica_persistente").orientacao, '"Pontos de stop"');
+  contem(a.find(x => x.tipo === "tilt").orientacao, "pare por hoje");
+});
+t("tela: aluno vê a orientação, mentor o texto técnico", () => {
+  const src = readFileSync("src/personal.jsx", "utf8");
+  contem(src, '<Alertas itens={jornada.alertas} titulo="Fique de olho" aluno />');
+  contem(src, "aluno && a.orientacao ? a.orientacao : a.texto");
+  eq((src.match(/<Alertas itens=\{jornada\.alertas\} \/>/g) || []).length, 1, "a ficha do mentor segue sem `aluno`");
+});
+t("tela do aluno: resumo do dia, aviso de feedback, legenda e envio em 3 passos", () => {
+  const src = readFileSync("src/personal.jsx", "utf8");
+  const aluno = src.slice(src.indexOf("function PersonalAluno"), src.indexOf("function PersonalAluno") + 2500);
+  contem(aluno, "<AvisoFeedback "); contem(aluno, "<ResumoDoDia ");
+  contem(src, "<LegendaSemaforo />");
+  eq((src.match(/<Passo n=\{[123]\}/g) || []).length, 3);
+  contem(src, "<ComoExportarCsv />");
 });
 
 secao("mapaDeTags");

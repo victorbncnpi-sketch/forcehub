@@ -474,6 +474,10 @@ export function projecaoRecalibrada(plano, real) {
 // Recebem o ciclo já consolidado (envios ordenados por data, com dia/violações
 // gravados). Tudo aqui é observação de PROCESSO — é o que o mentor precisa ver
 // antes de abrir a análise do dia.
+//
+// Dois textos por alerta: `texto` é o técnico, para o mentor; `orientacao` é
+// o mesmo fato dito ao aluno em tom de conselho — quem lê é leigo e está no
+// meio do ciclo, então a frase diz o que fazer, não só o que aconteceu.
 export function alertasDoAluno(ciclo, envios, hojeISO) {
   const lista = Array.isArray(envios) ? [...envios].sort((a, b) => String(a.data).localeCompare(String(b.data))) : [];
   const out = [];
@@ -485,7 +489,8 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
   const comTilt = lista.slice(-3).filter(e => e.dia && e.dia.maxPerdasSeguidas >= 3);
   const tilt = comTilt[comTilt.length - 1];
   if (tilt) {
-    out.push({ tipo: "tilt", tom: "red", texto: `${tilt.dia.maxPerdasSeguidas} operações perdedoras seguidas em ${dmy(tilt.data)} — possível tilt.` });
+    out.push({ tipo: "tilt", tom: "red", texto: `${tilt.dia.maxPerdasSeguidas} operações perdedoras seguidas em ${dmy(tilt.data)} — possível tilt.`,
+      orientacao: `Você teve ${tilt.dia.maxPerdasSeguidas} perdas seguidas em ${dmy(tilt.data)}. Quando isso acontecer, pare por hoje e respire: a próxima entrada depois de uma sequência assim costuma ser no impulso.` });
   }
 
   // 2. Métrica fora da faixa por 3 dias seguidos (olha o Quadro já gravado).
@@ -496,7 +501,8 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
       if (l.status === "fora" || l.status === "atencao") conta[l.label] = (conta[l.label] || 0) + 1;
     }));
     Object.entries(conta).filter(([, n]) => n === 3).forEach(([label]) => {
-      out.push({ tipo: "metrica_persistente", tom: "gold", texto: `"${label}" fora da faixa nos últimos 3 envios — vale revisar o gerenciamento.` });
+      out.push({ tipo: "metrica_persistente", tom: "gold", texto: `"${label}" fora da faixa nos últimos 3 envios — vale revisar o gerenciamento.`,
+        orientacao: `"${label.replace(/\s*\(.*\)/, "")}" ficou fora do combinado nos seus últimos 3 dias. Releia o seu plano antes do próximo pregão e, se tiver dúvida, pergunte ao mentor no envio do dia.` });
     });
   }
 
@@ -504,20 +510,23 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
   const dd = num(ciclo && ciclo.drawdownReal);
   const ddEsp = num(ciclo && ciclo.drawdownEsperado);
   if (dd != null && ddEsp != null && ddEsp > 0 && dd > ddEsp) {
-    out.push({ tipo: "drawdown", tom: "red", texto: `Drawdown real de ${brl(dd)} acima do esperado na projeção (${brl(ddEsp)}).` });
+    out.push({ tipo: "drawdown", tom: "red", texto: `Drawdown real de ${brl(dd)} acima do esperado na projeção (${brl(ddEsp)}).`,
+      orientacao: `Sua maior queda no ciclo (${brl(dd)}) passou do que a projeção previa (${brl(ddEsp)}). Hora de ir com calma: siga o plano à risca e fale com o mentor antes de aumentar a mão.` });
   }
 
   // 4. Sete dias sem envio (só para ciclo ativo — pausado/concluído não alerta).
   if (ultimo && (!ciclo || ciclo.status === "ativo")) {
     const diff = Math.floor((Date.parse(hojeISO + "T12:00:00Z") - Date.parse(ultimo.data + "T12:00:00Z")) / 864e5);
     if (isFinite(diff) && diff >= 7) {
-      out.push({ tipo: "sem_envio", tom: "gold", texto: `Sem envio há ${diff} dias (último: ${dmy(ultimo.data)}).` });
+      out.push({ tipo: "sem_envio", tom: "gold", texto: `Sem envio há ${diff} dias (último: ${dmy(ultimo.data)}).`,
+        orientacao: `Seu último envio foi em ${dmy(ultimo.data)}, há ${diff} dias. Operou nesse período? Envie os dias que faltam para o mentor acompanhar. Se não operou, tudo bem — o ciclo só conta os dias operados.` });
     }
   }
 
   // 5. Envio aguardando análise (o mentor é o gargalo — isto é o lembrete).
   const pend = lista.filter(e => e.status !== "analisado").length;
-  if (pend) out.push({ tipo: "aguardando", tom: "blue", texto: `${pend} envio${pend > 1 ? "s" : ""} aguardando análise.` });
+  if (pend) out.push({ tipo: "aguardando", tom: "blue", texto: `${pend} envio${pend > 1 ? "s" : ""} aguardando análise.`,
+    orientacao: pend > 1 ? `${pend} dias seus estão com o mentor. O feedback aparece na aba Feedback assim que ele analisar.` : "Um dia seu está com o mentor. O feedback aparece na aba Feedback assim que ele analisar." });
 
   return out;
 }
