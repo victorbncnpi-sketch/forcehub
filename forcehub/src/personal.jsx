@@ -120,17 +120,50 @@ function BarraCiclo({ diaAtual, diasPrevistos, status }) {
 
 // `aluno`: mostra a `orientacao` (conselho, em linguagem simples) no lugar do
 // texto técnico que o mentor lê. Ver alertasDoAluno em api/_pt-regras.js.
+// Recolhível: com os alertas de comportamento a lista ficou longa e empurrava
+// o resto da tela. Fechada, o cabeçalho mostra a contagem por gravidade — o
+// vermelho continua à vista. A escolha (aberta/fechada) fica neste navegador.
+const ALERTA_GRUPOS = [
+  ["red", "para corrigir", "para corrigir"], ["gold", "ponto de atenção", "pontos de atenção"],
+  ["blue", "aviso", "avisos"], ["green", "conquista", "conquistas"],
+];
+const corAlerta = (tom) => tom === "red" ? T.red : tom === "blue" ? T.blue : tom === "green" ? T.green : T.gold;
 function Alertas({ itens, titulo = "Alertas", aluno }) {
+  const chave = "forcehub:pt:alertasAbertos:" + (aluno ? "aluno" : "mentor");
+  const [aberto, setAberto] = useState(() => { try { return localStorage.getItem(chave) === "1"; } catch (e) { return false; } });
   if (!itens || !itens.length) return null;
+  const alternar = () => setAberto(a => { const v = !a; try { localStorage.setItem(chave, v ? "1" : "0"); } catch (e) {} return v; });
+  const contagem = ALERTA_GRUPOS.map(([tom, um, varios]) => {
+    const n = itens.filter(a => (a.tom || "gold") === tom).length;
+    return n ? { tom, txt: n + " " + (n === 1 ? um : varios) } : null;
+  }).filter(Boolean);
   return (
-    <Card style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase" }}>{titulo}</div>
-      {itens.map((a, i) => (
-        <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start", fontSize: 13, color: T.mut }}>
-          <span style={{ color: a.tom === "red" ? T.red : a.tom === "blue" ? T.blue : a.tom === "green" ? T.green : T.gold, display: "flex", marginTop: 1 }}><Icon name={a.tom === "green" ? "check" : "alert"} size={14} /></span>
-          <span style={{ lineHeight: 1.55 }}>{aluno && a.orientacao ? a.orientacao : a.texto}</span>
+    <Card style={{ overflow: "hidden" }}>
+      <button className="fh-btn" onClick={alternar} aria-expanded={aberto}
+        style={{ width: "100%", background: "transparent", border: "none", borderRadius: 0, padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap", textAlign: "left" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
+          <span style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase" }}>{titulo} · {itens.length}</span>
+          {contagem.map(c => (
+            <span key={c.tom} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: corAlerta(c.tom), fontWeight: 600 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: corAlerta(c.tom) }} />{c.txt}
+            </span>
+          ))}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.mut, fontWeight: 600 }}>
+          {aberto ? "Recolher" : "Ver alertas"}
+          <span aria-hidden="true" style={{ display: "inline-block", transform: aberto ? "rotate(180deg)" : "none", transition: "transform .18s" }}>▾</span>
+        </span>
+      </button>
+      {aberto && (
+        <div style={{ padding: "2px 16px 14px", display: "flex", flexDirection: "column", gap: 8, borderTop: "1px solid " + T.line, paddingTop: 12 }}>
+          {itens.map((a, i) => (
+            <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start", fontSize: 13, color: T.mut }}>
+              <span style={{ color: corAlerta(a.tom), display: "flex", marginTop: 1 }}><Icon name={a.tom === "green" ? "check" : "alert"} size={14} /></span>
+              <span style={{ lineHeight: 1.55 }}>{aluno && a.orientacao ? a.orientacao : a.texto}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </Card>
   );
 }
