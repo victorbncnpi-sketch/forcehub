@@ -12,8 +12,9 @@
 //   GET  /api/personal?fn=img&id=<id>     -> print de um envio
 //   POST /api/personal { action, ... }    -> ver AÇÕES abaixo
 //
-// PRIVACIDADE: o diagnóstico da Sessão Zero (capacidade financeira) e as
-// anotações do mentor NUNCA vão para o aluno. São removidos na saída sempre que
+// PRIVACIDADE: o diagnóstico da Sessão Zero (capacidade financeira), as
+// anotações do mentor e o RASCUNHO do diagnóstico por IA NUNCA vão para o
+// aluno (dele, só sai o texto que o mentor publicou). São removidos na saída sempre que
 // quem lê não é da equipe — ver `paraAluno()`. É a única informação do hub com
 // essa restrição, e ela é aplicada aqui, no servidor, não na tela.
 import { getRedis } from "./_redis";
@@ -28,6 +29,7 @@ import {
   projecao, comparaProjecao, quadroGerenciamento, planoVigenteEm,
   consolidaCiclo, alertasDoAluno, mapaDeTags, camposCalculados, avisosDoPlano, projecaoRecalibrada,
 } from "./_pt-regras";
+import { dadosParaIA, gerarDiagnosticoIA, limparTexto, estadoInicial } from "./_pt-ia";
 
 const erro = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
 
@@ -35,7 +37,7 @@ const erro = (res, code, msg) => res.status(code).json({ ok: false, error: msg }
 // cliente — inclusive na dele mesmo.
 function paraAluno(ciclo) {
   if (!ciclo) return null;
-  const { diagnostico, notas, ...resto } = ciclo;
+  const { diagnostico, notas, diagIA, ...resto } = ciclo;
   return resto;
 }
 
@@ -65,6 +67,9 @@ async function montarJornada(redis, user, staff) {
     enviouHoje: envios.some(e => e.data === hoje),
     alertas: staff ? alertas : alertas.filter(a => a.tipo !== "aguardando"),
     tags: mapaDeTags(envios),
+    // Diagnóstico do momento: o aluno só recebe a versão publicada pelo mentor.
+    diagnosticoMomento: ciclo.diagIA && ciclo.diagIA.publicado
+      ? { texto: ciclo.diagIA.publicado.texto, em: ciclo.diagIA.publicado.em } : null,
     hoje,
   };
 }
@@ -210,6 +215,39 @@ export default async function handler(req, res) {
       const novo = STATUS_CICLO.has(body.status) ? body.status : "concluido";
       await salvarCiclo(redis, alvo, { ...ciclo, status: novo, fim: novo === "concluido" ? (isISO(body.fim) ? body.fim : hojeISO()) : null });
       return res.status(200).json({ ok: true, status: novo });
+    }
+
+    // ── Diagnóstico do momento (IA → mentor revisa → aluno) ─────────────────
+    // op: "gerar" (rascunho novo pela IA), "salvar" (rascunho editado),
+    // "publicar" (salva e libera ao aluno), "retirar" (tira do aluno).
+    if (action === "diag-ia") {
+      const r = soStaff(); if (r) return r;
+      const ciclo = await lerCiclo(redis, alvo);
+      if (!ciclo) return erro(res, 404, "Este aluno ainda não tem ciclo.");
+      const op = txt(body.op, 12);
+      const est = estadoInicial(ciclo.diagIA);
+      const autor = sess.name || sess.user;
+      if (op === "gerar") {
+        const { envios, plano, real } = await visaoAluno(redis, alvo);
+        const proj = projecao(plano);
+        const base = proj ? proj.cenarios.find(c => c.chave === "base") : null;
+        const alertas = alertasDoAluno({ ...ciclo, drawdownReal: real.drawdownReal, drawdownEsperado: base && base.drawdownEsperado }, envios, hojeISO());
+        let texto;
+        try { texto = await gerarDiagnosticoIA(dadosParaIA({ ciclo, plano, real, envios, alertas, tags: mapaDeTags(envios) })); }
+        catch (e) { return erro(res, 502, "Não consegui gerar o diagnóstico agora: " + e.message); }
+        Object.assign(est, { rascunho: texto, geradoEm: Date.now(), geradoPor: autor, baseDias: real.diasOperados, editadoEm: null });
+      } else if (op === "salvar" || op === "publicar") {
+        const texto = limparTexto(body.texto);
+        if (op === "publicar" && texto.length < 40) return erro(res, 400, "Escreva (ou gere) o diagnóstico antes de publicar.");
+        if (texto !== est.rascunho) Object.assign(est, { rascunho: texto, editadoEm: Date.now() });
+        if (op === "publicar") est.publicado = { texto, em: Date.now(), por: autor };
+      } else if (op === "retirar") {
+        est.publicado = null;
+      } else {
+        return erro(res, 400, "Operação inválida.");
+      }
+      await salvarCiclo(redis, alvo, { ...ciclo, diagIA: est });
+      return res.status(200).json({ ok: true, diagIA: est });
     }
 
     if (action === "notas") {

@@ -352,6 +352,84 @@ await ta("remover o ciclo tira o aluno do índice", async () => {
   eq((await get(ctx, MENTOR, { fn: "alunos" })).body.alunos.length, 0);
 });
 
+
+secao("DIAGNÓSTICO — campos da Sessão Zero");
+await ta("prejuízo passado é gravado; capital total e aporte mensal saíram", async () => {
+  const ctx = await ambiente();
+  await post(ctx, MENTOR, { action: "ciclo", diagnostico: { capitalOperacional: 18000, prejuizoPassado: "15000", capitalTotal: 90000, aporteMensal: 500 } }, { user: "andre.gain" });
+  const d = (await get(ctx, MENTOR, { user: "andre.gain" })).body.ciclo.diagnostico;
+  eq(d.prejuizoPassado, 15000); ehFalso("capitalTotal" in d); ehFalso("aporteMensal" in d);
+  const r = await get(ctx, ALUNO);
+  ehFalso(JSON.stringify(r.body).includes("15000"), "prejuízo passado vazou para o aluno");
+});
+await ta("prejuízo passado negativo ou texto vira vazio", async () => {
+  const ctx = await ambiente();
+  await post(ctx, MENTOR, { action: "ciclo", diagnostico: { prejuizoPassado: -3 } }, { user: "andre.gain" });
+  eq((await get(ctx, MENTOR, { user: "andre.gain" })).body.ciclo.diagnostico.prejuizoPassado, null);
+});
+
+secao("DIAGNÓSTICO DO MOMENTO — IA escreve, mentor aprova, aluno lê");
+const TXT1 = "André, você fechou a semana respeitando o horário em todos os dias. Isso é disciplina de verdade e merece ser reconhecido.";
+const TXT2 = "André, nova leitura: o stop foi respeitado em todas as operações desta semana, e isso mostra que o plano já está virando hábito.";
+const diag = (ctx, s, body) => post(ctx, s, { action: "diag-ia", ...body }, { user: "andre.gain" });
+await ta("aluno não pode gerar, salvar nem publicar", async () => {
+  const ctx = await ambiente();
+  for (const op of ["gerar", "salvar", "publicar", "retirar"]) eq((await diag(ctx, ALUNO, { op, texto: TXT1 })).status, 403, op);
+});
+await ta("moderador também revisa e publica", async () => {
+  const ctx = await ambiente();
+  eq((await diag(ctx, MOD, { op: "publicar", texto: TXT1 })).status, 200);
+});
+await ta("rascunho salvo NÃO chega ao aluno", async () => {
+  const ctx = await ambiente();
+  eq((await diag(ctx, MENTOR, { op: "salvar", texto: TXT1 })).status, 200);
+  const r = await get(ctx, ALUNO);
+  eq(r.body.diagnosticoMomento, null);
+  ehFalso("diagIA" in r.body.ciclo, "estado do rascunho vazou");
+  ehFalso(JSON.stringify(r.body).includes("fechou a semana"), "texto do rascunho vazou");
+  contem(JSON.stringify((await get(ctx, MENTOR, { user: "andre.gain" })).body.ciclo.diagIA), "fechou a semana");
+});
+await ta("publicado chega ao aluno; novo rascunho não troca o publicado até publicar", async () => {
+  const ctx = await ambiente();
+  await diag(ctx, MENTOR, { op: "publicar", texto: TXT1 });
+  eq((await get(ctx, ALUNO)).body.diagnosticoMomento.texto, TXT1);
+  await diag(ctx, MENTOR, { op: "salvar", texto: TXT2 });
+  const a = (await get(ctx, ALUNO)).body;
+  eq(a.diagnosticoMomento.texto, TXT1, "o aluno continua vendo a versão aprovada");
+  ehFalso(JSON.stringify(a).includes("nova leitura"));
+  await diag(ctx, MENTOR, { op: "publicar", texto: TXT2 });
+  eq((await get(ctx, ALUNO)).body.diagnosticoMomento.texto, TXT2);
+});
+await ta("retirar tira do aluno e mantém o rascunho para o mentor", async () => {
+  const ctx = await ambiente();
+  await diag(ctx, MENTOR, { op: "publicar", texto: TXT1 });
+  await diag(ctx, MENTOR, { op: "retirar" });
+  eq((await get(ctx, ALUNO)).body.diagnosticoMomento, null);
+  eq((await get(ctx, MENTOR, { user: "andre.gain" })).body.ciclo.diagIA.rascunho, TXT1);
+});
+await ta("publicar texto vazio ou curto é recusado", async () => {
+  const ctx = await ambiente();
+  eq((await diag(ctx, MENTOR, { op: "publicar", texto: "  oi  " })).status, 400);
+  eq((await get(ctx, ALUNO)).body.diagnosticoMomento, null);
+});
+await ta("sem IA configurada: 502 com mensagem clara, nada é gravado", async () => {
+  const ctx = await ambiente();
+  const antes = process.env.GEMINI_API_KEY; delete process.env.GEMINI_API_KEY;
+  const r = await diag(ctx, MENTOR, { op: "gerar" });
+  if (antes) process.env.GEMINI_API_KEY = antes;
+  eq(r.status, 502); contem(r.body.error, "Não consegui gerar");
+  eq((await get(ctx, MENTOR, { user: "andre.gain" })).body.ciclo.diagIA, undefined);
+});
+await ta("editar a Sessão Zero não apaga o diagnóstico publicado", async () => {
+  const ctx = await ambiente();
+  await diag(ctx, MENTOR, { op: "publicar", texto: TXT1 });
+  await post(ctx, MENTOR, { action: "ciclo", nome: "André G." }, { user: "andre.gain" });
+  eq((await get(ctx, ALUNO)).body.diagnosticoMomento.texto, TXT1);
+});
+await ta("operação desconhecida é recusada", async () => {
+  eq((await diag(await ambiente(), MENTOR, { op: "apagar-tudo" })).status, 400);
+});
+
 console.log("");
 process.exit(resumo() ? 1 : 0);
 })();

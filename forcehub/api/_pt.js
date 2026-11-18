@@ -88,9 +88,10 @@ function sanitizeDiagnostico(d) {
   const o = d || {};
   return {
     capitalOperacional: nPos(o.capitalOperacional),
-    capitalTotal: nPos(o.capitalTotal),
+    // Quanto o aluno diz já ter perdido no mercado antes do acompanhamento.
+    // (Capital total e aporte mensal saíram da Sessão Zero: ninguém usava.)
+    prejuizoPassado: nPos(o.prejuizoPassado),
     outraRenda: !!o.outraRenda,
-    aporteMensal: nOrNull(o.aporteMensal),
     experiencia: txt(o.experiencia, 120),
     resultadoHistorico: txt(o.resultadoHistorico, 1200),
     observacoes: txt(o.observacoes, 2000),

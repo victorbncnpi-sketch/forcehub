@@ -250,5 +250,95 @@ t("classifica tendência entre metades", () => {
 });
 t("sem feedback devolve lista vazia", () => eq(mapaDeTags([{ data: "2026-09-01" }]), []));
 t("null não explode", () => eq(mapaDeTags(null), []));
+
+secao("alertasDoAluno — comportamento nos dias recentes");
+const CIC = { status: "ativo", planos: [P] };
+const op = (hora, resultado, contratos = 2, setup = "Rompimento") => ({ hora, resultado, contratos, setup });
+const env = (data, ops) => ({ ...mkEnvio(data, ops), status: "analisado" });
+const tipos = (a) => a.map(x => x.tipo);
+const al = (envios, hoje = "2026-09-20") => alertasDoAluno(CIC, envios, hoje);
+t("operação fora do horário vira alerta com a hora e a janela do plano", () => {
+  const a = al([env("2026-09-10", [op("17:42", 30)])]);
+  const x = a.find(z => z.tipo === "fora_de_horario");
+  ehVerdade(x, "sem alerta de horário");
+  contem(x.orientacao, "17:42"); contem(x.orientacao, "09:15 às 17:00"); contem(x.orientacao, "10/09/2026");
+});
+t("perda maior que o stop: cita o stop e a pior perda", () => {
+  const a = al([env("2026-09-10", [op("10:00", -72)])]); // 72 / (2 × 0,2) = 180 pts
+  const x = a.find(z => z.tipo === "perda_acima_stop");
+  ehVerdade(x); contem(x.orientacao, "stop de 100 pontos"); contem(x.orientacao, "180 pontos");
+});
+t("perda dentro da tolerância do stop (até 15%) não alerta", () => {
+  ehFalso(tipos(al([env("2026-09-10", [op("10:00", -45)])])).includes("perda_acima_stop")); // 112 pts
+});
+t("contratos acima do combinado", () => {
+  const x = al([env("2026-09-10", [op("10:00", 30, 4)])]).find(z => z.tipo === "contratos_acima");
+  ehVerdade(x); contem(x.orientacao, "chegou a 4"); contem(x.orientacao, "o seu plano é 2");
+});
+t("continuou operando depois de bater o alvo do dia", () => {
+  ehVerdade(tipos(al([env("2026-09-10", [op("10:00", 130), op("11:00", 10)])])).includes("overtrading"));
+});
+t("aumentou a mão logo depois de uma perda (mesmo dentro do teto)", () => {
+  const x = al([env("2026-09-10", [op("10:00", -20, 1), op("10:30", 30, 2)])]).find(z => z.tipo === "mao_apos_perda");
+  ehVerdade(x); contem(x.orientacao, "de 1 para 2");
+});
+t("reentrada até 5 min depois de um stop: alerta a partir de 2 vezes", () => {
+  const uma = [env("2026-09-10", [op("10:00", -20), op("10:03", 10)])];
+  ehFalso(tipos(al(uma)).includes("reentrada_impulso"), "uma vez só não é padrão");
+  const duas = [...uma, env("2026-09-11", [op("11:00", -20), op("11:05", 10)])];
+  ehVerdade(tipos(al(duas)).includes("reentrada_impulso"));
+});
+t("saiu antes do alvo na maioria dos gains", () => {
+  // 20 R$ / 0,4 = 50 pts, alvo 150 → bem abaixo de 70%
+  const a = al([env("2026-09-10", [op("10:00", 20), op("11:00", 24)])]);
+  const x = a.find(z => z.tipo === "saiu_antes_do_alvo");
+  ehVerdade(x); contem(x.orientacao, "o alvo é 150");
+});
+t("gains perto do alvo não contam como saída cedo", () => {
+  ehFalso(tipos(al([env("2026-09-10", [op("10:00", 56), op("11:00", 58)])])).includes("saiu_antes_do_alvo")); // 140 pts
+});
+t("mais operações que o planejado em 2 dias", () => {
+  const cinco = (d) => env(d, ["09:30", "10:00", "10:30", "11:00", "11:30"].map(h => op(h, 5)));
+  ehFalso(tipos(al([cinco("2026-09-10")])).includes("excesso_operacoes"));
+  ehVerdade(tipos(al([cinco("2026-09-10"), cinco("2026-09-11")])).includes("excesso_operacoes"));
+});
+t("setup fora da lista combinada", () => {
+  const x = al([env("2026-09-10", [op("10:00", 30, 2, "Pullback")])]).find(z => z.tipo === "setup_nao_autorizado");
+  ehVerdade(x); contem(x.orientacao, '"Pullback"');
+});
+t("3 dias seguidos no negativo", () => {
+  const d = (data) => env(data, [op("10:00", -10)]);
+  ehVerdade(tipos(al([d("2026-09-10"), d("2026-09-11"), d("2026-09-14")])).includes("dias_negativos"));
+});
+t("3 dias seguidos sem quebrar regra: reconhecimento em verde, por último", () => {
+  const ok = (data) => env(data, [op("10:00", 60)]);
+  const a = al([env("2026-09-09", [op("17:45", 10)]), ok("2026-09-10"), ok("2026-09-11"), ok("2026-09-14")]);
+  const x = a.find(z => z.tipo === "sequencia_limpa");
+  ehVerdade(x); eq(x.tom, "green"); eq(a[a.length - 1].tipo, "sequencia_limpa");
+  eq(a[0].tom, "red", "regra quebrada vem primeiro");
+});
+t("janela curta: o que aconteceu há mais de 5 envios não alerta mais", () => {
+  const ok = (data) => env(data, [op("10:00", 60)]);
+  const a = al([env("2026-09-01", [op("17:45", 10)]), ok("2026-09-02"), ok("2026-09-03"), ok("2026-09-04"), ok("2026-09-07"), ok("2026-09-08")]);
+  ehFalso(tipos(a).includes("fora_de_horario"));
+});
+t("perda acima do stop por 3 dias não repete como 'métrica persistente'", () => {
+  const ruim = (data) => env(data, [op("10:00", -72)]);
+  const a = al([ruim("2026-09-10"), ruim("2026-09-11"), ruim("2026-09-14")]);
+  ehVerdade(tipos(a).includes("perda_acima_stop"));
+  ehFalso(a.some(x => x.tipo === "metrica_persistente" && /stop/i.test(x.texto)), "assunto repetido");
+});
+t("alertas novos: orientação ao aluno própria e sem jargão", () => {
+  const dias = [env("2026-09-10", [op("10:00", -72, 1), op("10:02", 20, 3, "Pullback"), op("17:45", -20)]),
+    env("2026-09-11", [op("11:00", -20), op("11:04", 20), op("11:30", 20)])];
+  const a = al(dias);
+  ehVerdade(a.length >= 6, "esperava vários alertas, veio " + tipos(a).join(","));
+  for (const x of a) {
+    ehVerdade(x.orientacao && x.orientacao !== x.texto, x.tipo + " sem orientação");
+    ehFalso(/tilt|drawdown|revenge|overtrading|payoff|violaç/i.test(x.orientacao), x.tipo + ": " + x.orientacao);
+    ehFalso("cobre" in x, "campo interno vazou");
+  }
+});
+
 console.log("");
 process.exit(resumo() ? 1 : 0);

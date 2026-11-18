@@ -127,7 +127,7 @@ function Alertas({ itens, titulo = "Alertas", aluno }) {
       <div style={{ fontSize: 11, color: T.dim, letterSpacing: 0.4, textTransform: "uppercase" }}>{titulo}</div>
       {itens.map((a, i) => (
         <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start", fontSize: 13, color: T.mut }}>
-          <span style={{ color: a.tom === "red" ? T.red : a.tom === "blue" ? T.blue : T.gold, display: "flex", marginTop: 1 }}><Icon name="alert" size={14} /></span>
+          <span style={{ color: a.tom === "red" ? T.red : a.tom === "blue" ? T.blue : a.tom === "green" ? T.green : T.gold, display: "flex", marginTop: 1 }}><Icon name={a.tom === "green" ? "check" : "alert"} size={14} /></span>
           <span style={{ lineHeight: 1.55 }}>{aluno && a.orientacao ? a.orientacao : a.texto}</span>
         </div>
       ))}
@@ -1007,6 +1007,7 @@ function PersonalAluno({ session }) {
       <BarraCiclo diaAtual={jornada.real.diasOperados} diasPrevistos={jornada.ciclo.diasPrevistos} status={jornada.ciclo.status} />
       <QuadroGerenciamento linhas={jornada.quadro} data={jornada.quadroData} />
       <Alertas itens={jornada.alertas} titulo="Fique de olho" aluno />
+      <DiagnosticoMomento diag={jornada.diagnosticoMomento} />
       {jornada.ciclo.status === "concluido" && <RelatorioFinal jornada={jornada} />}
       <div ref={abasRef} style={{ scrollMarginTop: 12 }}><Tabs items={abas} value={aba} onChange={setAba} /></div>
       {aba === "enviar" && <EnviarDia plano={jornada.plano} jornada={jornada} onEnviado={carregar} />}
@@ -1403,8 +1404,7 @@ function SessaoZero({ alvo, disponiveis, onPronto, onCancelar }) {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
           <Field label="Capital operacional (R$)" hint="O que ele pode colocar em risco"><Input type="number" step="0.01" mono {...dcampo("capitalOperacional")} /></Field>
-          <Field label="Capital total (R$)"><Input type="number" step="0.01" mono {...dcampo("capitalTotal")} /></Field>
-          <Field label="Aporte mensal (R$)"><Input type="number" step="0.01" mono {...dcampo("aporteMensal")} /></Field>
+          <Field label="Prejuízo passado (R$)" hint="Quanto o aluno diz já ter perdido no mercado"><Input type="number" step="0.01" min="0" mono {...dcampo("prejuizoPassado")} placeholder="Ex.: 15000" /></Field>
           <Field label="Tempo de experiência"><Input {...dcampo("experiencia")} placeholder="Ex.: 2 anos" /></Field>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13.5, color: T.mut, cursor: "pointer" }}>
@@ -1688,6 +1688,101 @@ function AjustarPlano({ aluno, jornada, onFechar, onSalvo }) {
   );
 }
 
+// ─── Diagnóstico do momento ──────────────────────────────────────────────────
+// Texto em tom de mentor sobre como o aluno está no ciclo. A IA escreve um
+// rascunho, o mentor revisa/edita e publica; o aluno só vê o publicado.
+const paragrafos = (t) => String(t || "").split(/\n\s*\n+/).filter(Boolean);
+
+function DiagnosticoMomento({ diag }) {
+  const [aberto, setAberto] = useState(false);
+  const chave = "forcehub:pt:diagLido";
+  const [visto, setVisto] = useState(() => { try { return Number(localStorage.getItem(chave)) || 0; } catch (e) { return 0; } });
+  if (!diag || !diag.texto) return null;
+  const novo = diag.em && diag.em > visto;
+  const ps = paragrafos(diag.texto);
+  const longo = ps.length > 2 || diag.texto.length > 520;
+  const mostrar = aberto || !longo ? ps : ps.slice(0, 1);
+  const abrir = () => { setAberto(a => !a); try { localStorage.setItem(chave, String(diag.em || Date.now())); } catch (e) {} setVisto(diag.em || Date.now()); };
+  return (
+    <Card style={{ padding: "16px 18px", borderColor: T.lineGold, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <span style={{ fontSize: 18 }} aria-hidden="true">🧭</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: T.gold }}>Como você está no ciclo</span>
+          {novo && <Badge tone="gold">novo</Badge>}
+        </span>
+        <span style={{ fontSize: 11.5, color: T.dim }}>Revisado pelo mentor em {diag.em ? new Date(diag.em).toLocaleDateString("pt-BR") : "—"}</span>
+      </div>
+      {mostrar.map((p, i) => <p key={i} style={{ margin: 0, fontSize: 14, color: T.text, lineHeight: 1.7 }}>{p}</p>)}
+      {longo && <div><Button variant="ghost" size="sm" onClick={abrir}>{aberto ? "Mostrar menos" : "Ler tudo"}</Button></div>}
+    </Card>
+  );
+}
+
+function PainelDiagnosticoIA({ user, jornada, onMudou }) {
+  const est = (jornada.ciclo && jornada.ciclo.diagIA) || {};
+  const [texto, setTexto] = useState(est.rascunho || "");
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null);
+  useEffect(() => { setTexto(est.rascunho || ""); }, [est.rascunho]);
+  const pub = est.publicado;
+  const alterado = texto.trim() !== (est.rascunho || "").trim();
+  const difereDoPublicado = pub && texto.trim() !== pub.texto.trim();
+  const diasAgora = (jornada.real && jornada.real.diasOperados) || 0;
+  const desatualizado = est.geradoEm && est.baseDias != null && diasAgora > est.baseDias;
+
+  const chamar = async (op, extra = {}) => {
+    setBusy(op); setMsg(null);
+    try {
+      const j = await api.post("/api/personal?user=" + encodeURIComponent(user), { action: "diag-ia", op, ...extra });
+      if (op === "gerar") setTexto(j.diagIA.rascunho);
+      setMsg({ tom: "green", txt: { gerar: "Rascunho gerado. Revise e edite antes de publicar.", salvar: "Rascunho salvo — o aluno ainda não vê.", publicar: "Publicado: o aluno já vê este texto.", retirar: "Retirado: o aluno não vê mais o diagnóstico." }[op] });
+      await onMudou();
+    } catch (e) { setMsg({ tom: "red", txt: e.message }); }
+    setBusy("");
+  };
+  const gerar = async () => {
+    if (texto.trim() && !(await confirmDialog({ title: "Gerar um novo rascunho?", message: "O texto do campo será substituído pelo que a IA escrever. A versão publicada (se houver) continua com o aluno até você publicar de novo.", confirmLabel: "Gerar novo" }))) return;
+    chamar("gerar");
+  };
+  const fmt = (t) => t ? new Date(t).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+
+  return (
+    <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0, flex: "1 1 260px" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.gold }}>Diagnóstico do momento (para o aluno)</div>
+          <div style={{ fontSize: 12.5, color: T.dim, marginTop: 5, lineHeight: 1.55 }}>A IA escreve um rascunho em tom de mentor com os números do ciclo. Você revisa, edita e publica — o aluno só vê depois de publicado. Observações e anotações privadas não entram no texto.</div>
+        </div>
+        <Badge tone={pub ? "green" : "mut"}>{pub ? "Publicado " + fmt(pub.em) : "Não publicado"}</Badge>
+      </div>
+      {desatualizado && <Banner tone="gold">O rascunho foi gerado com {est.baseDias} dia(s) operado(s); agora são {diasAgora}. Vale gerar de novo antes de publicar.</Banner>}
+      <textarea className="fh-input" rows={10} maxLength={3000} value={texto} onChange={e => setTexto(e.target.value)} disabled={busy === "gerar"}
+        placeholder="Clique em “Gerar com IA” para criar o rascunho — ou escreva você mesmo." style={{ resize: "vertical", lineHeight: 1.65, fontSize: 14 }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11.5, color: T.dim }}>
+          {est.geradoEm ? `Gerado por ${est.geradoPor || "—"} em ${fmt(est.geradoEm)}` : "Nenhum rascunho ainda"}{est.editadoEm ? ` · editado em ${fmt(est.editadoEm)}` : ""}{difereDoPublicado ? " · difere do publicado" : ""}
+          {" · "}{texto.length}/3000
+        </span>
+        <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button variant="ghost" size="sm" onClick={gerar} disabled={!!busy}>{busy === "gerar" ? <><Spinner size={13} /> Gerando…</> : "✨ Gerar com IA"}</Button>
+          <Button variant="ghost" size="sm" onClick={() => chamar("salvar", { texto })} disabled={!!busy || !alterado}>{busy === "salvar" ? <Spinner size={13} /> : "Salvar rascunho"}</Button>
+          {pub && <Button variant="ghost" size="sm" onClick={() => chamar("retirar")} disabled={!!busy}>Retirar do aluno</Button>}
+          <Button size="sm" onClick={() => chamar("publicar", { texto })} disabled={!!busy || texto.trim().length < 40 || (pub && !difereDoPublicado)}>{busy === "publicar" ? <Spinner size={13} /> : pub ? "Publicar nova versão" : "Aprovar e publicar"}</Button>
+        </span>
+      </div>
+      {msg && (msg.tom === "red" ? <Banner tone="red">{msg.txt}</Banner>
+        : <div role="status" style={{ fontSize: 13, color: T.green }}>✓ {msg.txt}</div>)}
+      {pub && difereDoPublicado && (
+        <details style={{ fontSize: 13, color: T.mut }}>
+          <summary style={{ cursor: "pointer", color: T.dim }}>Ver o que o aluno está vendo agora</summary>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>{paragrafos(pub.texto).map((p, i) => <p key={i} style={{ margin: 0, lineHeight: 1.65 }}>{p}</p>)}</div>
+        </details>
+      )}
+    </Card>
+  );
+}
+
 // Tela 4 — Ficha do aluno: tudo que o mentor precisa antes de uma conversa.
 function FichaAluno({ aluno, jornada, onVoltar, onRecarregar, onEditarZero, onAjustar }) {
   const [notas, setNotas] = useState(jornada.ciclo.notas || "");
@@ -1787,10 +1882,12 @@ function FichaAluno({ aluno, jornada, onVoltar, onRecarregar, onEditarZero, onAj
       )}
 
       {aba === "diagnostico" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <PainelDiagnosticoIA user={aluno.user} jornada={jornada} onMudou={onRecarregar} />
         <Card style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
           <Disclaimer title="Informação restrita" icon="🔒">A capacidade financeira do aluno é visível só para a equipe — o servidor remove esta seção de qualquer resposta lida por ele.</Disclaimer>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14 }}>
-            {[["Capital operacional", BRL(d.capitalOperacional)], ["Capital total", BRL(d.capitalTotal)], ["Aporte mensal", BRL(d.aporteMensal)],
+            {[["Capital operacional", BRL(d.capitalOperacional)], ["Prejuízo passado", d.prejuizoPassado ? BRL(d.prejuizoPassado) : "—"],
               ["Outra fonte de renda", d.outraRenda ? "Sim" : "Não"], ["Experiência", d.experiencia || "—"],
               ["Risco/operação x capital", d.capitalOperacional && c.riscoPorOperacao ? ((c.riscoPorOperacao / d.capitalOperacional) * 100).toFixed(2) + "%" : "—"]].map(([l, v]) => (
               <div key={l}>
@@ -1802,6 +1899,7 @@ function FichaAluno({ aluno, jornada, onVoltar, onRecarregar, onEditarZero, onAj
           {d.resultadoHistorico && <Field label="Resultado histórico"><div style={{ fontSize: 13, color: T.mut, lineHeight: 1.7, whiteSpace: "pre-line" }}>{d.resultadoHistorico}</div></Field>}
           {d.observacoes && <Field label="Observações do mentor"><div style={{ fontSize: 13, color: T.mut, lineHeight: 1.7, whiteSpace: "pre-line" }}>{d.observacoes}</div></Field>}
         </Card>
+        </div>
       )}
 
       {aba === "planos" && (

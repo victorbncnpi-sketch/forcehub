@@ -493,11 +493,19 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
       orientacao: `Você teve ${tilt.dia.maxPerdasSeguidas} perdas seguidas em ${dmy(tilt.data)}. Quando isso acontecer, pare por hoje e respire: a próxima entrada depois de uma sequência assim costuma ser no impulso.` });
   }
 
-  // 2. Métrica fora da faixa por 3 dias seguidos (olha o Quadro já gravado).
+  // 2. Comportamento nos dias recentes (regra quebrada, saída cedo, reentrada
+  // no impulso...). Vem antes da métrica persistente porque é mais específico:
+  // quando um destes já explica a linha do Quadro, a persistente não repete.
+  const especificos = alertasDeComportamento(ciclo, lista);
+  out.push(...especificos);
+  const cobertas = new Set(especificos.map(a => a.cobre).filter(Boolean));
+
+  // 3. Métrica fora da faixa por 3 dias seguidos (olha o Quadro já gravado).
   const ult3 = lista.slice(-3);
   if (ult3.length === 3) {
     const conta = {};
     ult3.forEach(e => (e.quadro || []).forEach(l => {
+      if (cobertas.has(l.chave)) return;
       if (l.status === "fora" || l.status === "atencao") conta[l.label] = (conta[l.label] || 0) + 1;
     }));
     Object.entries(conta).filter(([, n]) => n === 3).forEach(([label]) => {
@@ -506,7 +514,7 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
     });
   }
 
-  // 3. Drawdown real acima do esperado da projeção.
+  // 4. Drawdown real acima do esperado da projeção.
   const dd = num(ciclo && ciclo.drawdownReal);
   const ddEsp = num(ciclo && ciclo.drawdownEsperado);
   if (dd != null && ddEsp != null && ddEsp > 0 && dd > ddEsp) {
@@ -514,7 +522,7 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
       orientacao: `Sua maior queda no ciclo (${brl(dd)}) passou do que a projeção previa (${brl(ddEsp)}). Hora de ir com calma: siga o plano à risca e fale com o mentor antes de aumentar a mão.` });
   }
 
-  // 4. Sete dias sem envio (só para ciclo ativo — pausado/concluído não alerta).
+  // 5. Sete dias sem envio (só para ciclo ativo — pausado/concluído não alerta).
   if (ultimo && (!ciclo || ciclo.status === "ativo")) {
     const diff = Math.floor((Date.parse(hojeISO + "T12:00:00Z") - Date.parse(ultimo.data + "T12:00:00Z")) / 864e5);
     if (isFinite(diff) && diff >= 7) {
@@ -523,11 +531,172 @@ export function alertasDoAluno(ciclo, envios, hojeISO) {
     }
   }
 
-  // 5. Envio aguardando análise (o mentor é o gargalo — isto é o lembrete).
+  // 6. Envio aguardando análise (o mentor é o gargalo — isto é o lembrete).
   const pend = lista.filter(e => e.status !== "analisado").length;
   if (pend) out.push({ tipo: "aguardando", tom: "blue", texto: `${pend} envio${pend > 1 ? "s" : ""} aguardando análise.`,
     orientacao: pend > 1 ? `${pend} dias seus estão com o mentor. O feedback aparece na aba Feedback assim que ele analisar.` : "Um dia seu está com o mentor. O feedback aparece na aba Feedback assim que ele analisar." });
 
+  // Do mais grave para o reconhecimento: regra quebrada primeiro, elogio por último.
+  const RANK = { red: 0, gold: 1, blue: 2, green: 3 };
+  return out.map((a, i) => [a, i]).sort((x, y) => ((RANK[x[0].tom] ?? 1) - (RANK[y[0].tom] ?? 1)) || x[1] - y[1]).map(([a]) => {
+    const { cobre, ...resto } = a; return resto;
+  });
+}
+
+// ─── Alertas de comportamento (janela dos últimos dias enviados) ─────────────
+// Olham as violações já gravadas em cada envio e as operações na ordem do dia.
+// A janela é curta de propósito: quem corrigiu o hábito vê o alerta sumir em
+// poucos dias. `cobre` = linha do Quadro que o alerta já explica (a métrica
+// persistente não repete o mesmo assunto).
+export const JANELA_ALERTAS = 5;
+const REENTRADA_MIN = 5;       // nova entrada até 5 min depois de um stop
+const ALVO_CURTO = ALVO_ATENCAO; // gain abaixo de 70% do alvo = saiu cedo demais
+const minDoDia = (h) => { const m = /^(\d{2}):(\d{2})/.exec(String(h || "")); return m ? (+m[1]) * 60 + (+m[2]) : null; };
+const vezes = (n) => n === 1 ? "uma vez" : `${n} vezes`;
+const opsTxt = (n) => n === 1 ? "1 operação" : `${n} operações`;
+const ptsTxt = (v) => Math.round(v).toLocaleString("pt-BR");
+
+function alertasDeComportamento(ciclo, lista) {
+  const out = [];
+  const recentes = lista.slice(-JANELA_ALERTAS).filter(e => e && e.data);
+  if (!recentes.length) return out;
+  const n = recentes.length;
+  const periodo = n === 1 ? `em ${dmy(recentes[0].data)}` : `nos seus últimos ${n} dias enviados`;
+  const periodoM = n === 1 ? `em ${dmy(recentes[0].data)}` : `nos últimos ${n} envios`;
+  const planos = (ciclo && ciclo.planos) || [];
+  const viol = recentes.flatMap(e => (e.violacoes || []).map(v => ({ ...v, data: e.data })));
+  const doTipo = (t) => viol.filter(v => v.tipo === t);
+
+  // Fora do horário combinado.
+  const hor = doTipo("fora_de_horario");
+  if (hor.length) {
+    const u = hor[hor.length - 1];
+    out.push({ tipo: "fora_de_horario", tom: "red",
+      texto: `${opsTxt(hor.length)} fora do horário (${u.esperado}) ${periodoM} — a última às ${u.real} em ${dmy(u.data)}.`,
+      orientacao: `Você operou fora do seu horário combinado (${String(u.esperado).replace("–", " às ")}) ${vezes(hor.length)} ${periodo} — a última às ${u.real}, em ${dmy(u.data)}. Fora dessa janela o mercado muda de ritmo e as armadilhas aumentam. Passou do horário? Feche a plataforma.` });
+  }
+
+  // Perda maior que o stop por operação.
+  const stp = doTipo("sem_stop");
+  if (stp.length) {
+    const pior = stp.reduce((a, b) => (Number(b.real) > Number(a.real) ? b : a));
+    out.push({ tipo: "perda_acima_stop", tom: "red", cobre: "pontos_stop",
+      texto: `${opsTxt(stp.length)} com perda acima do stop (${pior.esperado} pts) ${periodoM} — pior: ${ptsTxt(pior.real)} pts em ${dmy(pior.data)}.`,
+      orientacao: `Em ${opsTxt(stp.length)} ${periodo}, a perda passou do seu stop de ${pior.esperado} pontos (a maior foi de ${ptsTxt(pior.real)} pontos, em ${dmy(pior.data)}). O stop é o seu seguro: posicione a ordem logo depois de entrar e não mexa nela.` });
+  }
+
+  // Mais contratos que o combinado.
+  const ctr = doTipo("contratos_acima");
+  if (ctr.length) {
+    const max = Math.max(...ctr.map(v => Number(v.real) || 0));
+    out.push({ tipo: "contratos_acima", tom: "red", cobre: "contratos",
+      texto: `${opsTxt(ctr.length)} acima do teto de contratos (${ctr[0].esperado}) ${periodoM} — até ${max} por entrada.`,
+      orientacao: `Você usou mais contratos que o combinado ${vezes(ctr.length)} ${periodo} (chegou a ${max} por entrada; o seu plano é ${ctr[0].esperado}). O tamanho da mão define o tamanho do risco — aumentar só depois de conversar com o mentor.` });
+  }
+
+  // Operou depois de o dia já ter encerrado (alvo ou limite batido).
+  const ovt = doTipo("overtrading");
+  if (ovt.length) {
+    const dias = new Set(ovt.map(v => v.data)).size;
+    out.push({ tipo: "overtrading", tom: "red",
+      texto: `${opsTxt(ovt.length)} depois de o dia encerrar pelo plano (alvo ou limite) em ${dias} dia(s) ${periodoM}.`,
+      orientacao: `${dias === 1 ? "Em um dia" : `Em ${dias} dias`} ${periodo} você continuou operando depois de bater o alvo ou o limite de perda do dia. Bateu? Desligue e volte amanhã — é o plano protegendo o que você já fez.` });
+  }
+
+  // Aumentou a mão logo depois de uma perda (tentar recuperar no tamanho).
+  // Reentrada rápida depois de um stop (entrada no impulso).
+  let maoApos = [], reentradas = [];
+  for (const e of recentes) {
+    const ops = [...(e.operacoes || [])].sort((a, b) => String(a.hora || "").localeCompare(String(b.hora || "")));
+    for (let i = 1; i < ops.length; i++) {
+      const a = ops[i - 1], b = ops[i];
+      if (!(num(a.resultado) < 0)) continue;
+      if ((pos(b.contratos) || 0) > (pos(a.contratos) || 0)) maoApos.push({ data: e.data, de: a.contratos, para: b.contratos, hora: b.hora });
+      const ma = minDoDia(a.hora), mb = minDoDia(b.hora);
+      if (ma != null && mb != null && mb - ma >= 0 && mb - ma <= REENTRADA_MIN) reentradas.push({ data: e.data, hora: b.hora });
+    }
+  }
+  if (maoApos.length) {
+    const u = maoApos[maoApos.length - 1];
+    out.push({ tipo: "mao_apos_perda", tom: "red",
+      texto: `Aumentou os contratos logo após uma perda ${vezes(maoApos.length)} ${periodoM} (ex.: ${u.de} → ${u.para} às ${u.hora || "—"} em ${dmy(u.data)}).`,
+      orientacao: `${maoApos.length === 1 ? "Uma vez" : `${maoApos.length} vezes`} ${periodo} você aumentou a quantidade de contratos logo depois de uma perda (por exemplo, de ${u.de} para ${u.para} em ${dmy(u.data)}). Querer recuperar rápido com a mão maior é o caminho mais curto para um dia ruim virar um dia muito ruim. Depois de perder, mantenha o tamanho — ou diminua.` });
+  }
+  if (reentradas.length >= 2) {
+    out.push({ tipo: "reentrada_impulso", tom: "gold",
+      texto: `${reentradas.length} reentradas em até ${REENTRADA_MIN} min após um stop ${periodoM} — possível revenge trade.`,
+      orientacao: `${reentradas.length} vezes ${periodo} você entrou de novo menos de ${REENTRADA_MIN} minutos depois de um stop. Depois de uma perda, dê um tempo: levante, respire e só volte se o seu setup aparecer de verdade.` });
+  }
+
+  // Saiu antes do alvo: gains bem menores que o alvo do plano daquele dia.
+  let gains = 0; const curtos = [];
+  let alvoRef = null;
+  for (const e of recentes) {
+    const p = planoVigenteEm(planos, e.data);
+    const alvo = pos(p && p.pontosAlvo);
+    if (!alvo) continue;
+    alvoRef = alvo;
+    for (const o of e.operacoes || []) {
+      if (!(num(o.resultado) > 0) || num(o.pontos) == null) continue;
+      gains++;
+      if (o.pontos < alvo * ALVO_CURTO) curtos.push(o.pontos);
+    }
+  }
+  if (curtos.length >= 2 && curtos.length / gains >= 0.5) {
+    const media = curtos.reduce((t, v) => t + v, 0) / curtos.length;
+    out.push({ tipo: "saiu_antes_do_alvo", tom: "gold", cobre: "pontos_alvo",
+      texto: `${curtos.length} de ${gains} gains abaixo de ${Math.round(ALVO_CURTO * 100)}% do alvo (${alvoRef} pts) ${periodoM} — média ${ptsTxt(media)} pts.`,
+      orientacao: `Em ${curtos.length} das suas ${gains} operações vencedoras ${periodo}, você saiu bem antes do alvo (média de ${ptsTxt(media)} pontos; o alvo é ${alvoRef}). Quando o ganho fica pequeno e a perda vai até o stop, a conta do plano não fecha. Deixe a ordem de alvo posicionada e confie nela.` });
+  }
+
+  // Mais operações por dia do que o planejado.
+  const excesso = recentes.map(e => {
+    const p = planoVigenteEm(planos, e.data);
+    const lim = pos(p && p.operacoesDia);
+    const qt = (e.operacoes || []).length;
+    return lim && qt > lim ? { data: e.data, qt, lim } : null;
+  }).filter(Boolean);
+  if (excesso.length >= 2) {
+    const max = excesso.reduce((a, b) => (b.qt > a.qt ? b : a));
+    out.push({ tipo: "excesso_operacoes", tom: "gold",
+      texto: `${excesso.length} dias acima das ${max.lim} operações/dia previstas ${periodoM} (pico: ${max.qt} em ${dmy(max.data)}).`,
+      orientacao: `Em ${excesso.length} dos ${n} dias ${n === 1 ? "" : "recentes "}você fez mais operações do que o planejado (chegou a ${max.qt} em ${dmy(max.data)}; o plano prevê ${max.lim} por dia). Mais entradas não é mais resultado: escolha só as oportunidades que estão no seu plano.` });
+  }
+
+  // Setup fora da lista combinada.
+  const stu = doTipo("setup_nao_autorizado");
+  if (stu.length) {
+    const nomes = [...new Set(stu.map(v => v.real))].slice(0, 3).map(x => `"${x}"`).join(", ");
+    out.push({ tipo: "setup_nao_autorizado", tom: "gold",
+      texto: `${opsTxt(stu.length)} com setup fora do plano ${periodoM}: ${nomes}.`,
+      orientacao: `Você entrou ${vezes(stu.length)} ${periodo} com setup que não está no seu plano (${nomes}). Fique nos setups combinados — são os que você e o mentor já estudaram juntos.` });
+  }
+
+  // Limite de perda do dia batido mais de uma vez na janela.
+  const lim = recentes.filter(e => e.dia && e.dia.atingiuLimite);
+  if (lim.length >= 2) {
+    out.push({ tipo: "limite_repetido", tom: "gold",
+      texto: `Limite de prejuízo diário atingido em ${lim.length} dos últimos ${n} envios.`,
+      orientacao: `Você bateu o limite de perda do dia em ${lim.length} dos seus últimos ${n} dias enviados. Parar no limite é o plano funcionando — mas, se está se repetindo, vale conversar com o mentor sobre o que tem acontecido nesses dias.` });
+  }
+
+  // Três dias seguidos no negativo (o fim da lista é o mais recente).
+  let neg = 0;
+  for (let i = lista.length - 1; i >= 0 && neg < 5; i--) { if (lista[i].dia && lista[i].dia.resultado < 0) neg++; else break; }
+  if (neg >= 3) {
+    out.push({ tipo: "dias_negativos", tom: "gold",
+      texto: `${neg} dias seguidos fechando no negativo.`,
+      orientacao: `Seus últimos ${neg} dias fecharam no negativo. Não é hora de tentar compensar: diminua o ritmo, fique só nos setups do plano e converse com o mentor.` });
+  }
+
+  // Reconhecimento: dias seguidos sem quebrar regra.
+  let limpos = 0;
+  for (let i = lista.length - 1; i >= 0; i--) { if ((lista[i].operacoes || []).length && !(lista[i].violacoes || []).length) limpos++; else break; }
+  if (limpos >= 3) {
+    out.push({ tipo: "sequencia_limpa", tom: "green",
+      texto: `${limpos} dias seguidos sem violação.`,
+      orientacao: `Você está há ${limpos} dias seguidos dentro do plano, sem quebrar nenhuma regra. É assim que se constrói consistência — continue nesse ritmo! 👏` });
+  }
   return out;
 }
 
