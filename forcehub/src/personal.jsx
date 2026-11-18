@@ -1485,6 +1485,21 @@ function TelaAnalise({ aluno, envio, tags, onVoltar, onPublicado, onAjustarPlano
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
   const geralRef = useRef(null);
+  // Rascunho do feedback geral pela IA: preenche o campo, o mentor revisa e
+  // publica. Usa as tags/comentários já marcados nas operações (não salvos).
+  const [gerandoIA, setGerandoIA] = useState(false);
+  const [daIA, setDaIA] = useState(false);
+  const gerarGeral = async () => {
+    if (gerandoIA) return;
+    if (fb.geral.trim() && !(await confirmDialog({ title: "Substituir o texto?", message: "O feedback geral que está no campo será trocado pelo rascunho da IA.", confirmLabel: "Gerar com IA" }))) return;
+    setGerandoIA(true); setErro("");
+    try {
+      const j = await api.post("/api/personal?user=" + encodeURIComponent(aluno.user), { action: "feedback-ia", envioId: envio.id, porOperacao: fb.porOperacao });
+      setFb(f => ({ ...f, geral: j.texto })); setDaIA(true);
+      setTimeout(() => geralRef.current && geralRef.current.focus(), 0);
+    } catch (e) { setErro(e.message); }
+    finally { setGerandoIA(false); }
+  };
 
   const ops = envio.operacoes || [];
   const doOp = (id) => fb.porOperacao[id] || { tags: [], comentario: "", recomendacao: "" };
@@ -1655,11 +1670,19 @@ function TelaAnalise({ aluno, envio, tags, onVoltar, onPublicado, onAjustarPlano
           </Card>
 
           <Card style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ fontSize: 11, color: T.mut, letterSpacing: 0.4, textTransform: "uppercase" }}>Feedback geral do dia</div>
-            <textarea ref={geralRef} className="fh-input" rows={5} maxLength={4000} value={fb.geral} onChange={e => setFb(f => ({ ...f, geral: e.target.value }))}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: T.mut, letterSpacing: 0.4, textTransform: "uppercase" }}>Feedback geral do dia</div>
+              <Button variant="ghost" size="sm" onClick={gerarGeral} disabled={gerandoIA || salvando} title="A IA escreve um rascunho em tom de mentor com os números do dia e as tags que você marcou">
+                {gerandoIA ? <><Spinner size={13} /> Gerando…</> : "✨ Gerar com IA"}
+              </Button>
+            </div>
+            <textarea ref={geralRef} className="fh-input" rows={daIA ? 8 : 5} maxLength={4000} value={fb.geral} onChange={e => setFb(f => ({ ...f, geral: e.target.value }))} disabled={gerandoIA}
               placeholder="A leitura do dia: o que sustentou o resultado, o que precisa mudar e o foco de amanhã." style={{ resize: "vertical", lineHeight: 1.7 }} />
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <Button onClick={publicar} disabled={salvando}>{salvando ? <><Spinner size={14} /> Publicando...</> : "Publicar feedback"}</Button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: T.dim, flex: "1 1 240px" }}>
+                {daIA ? "Rascunho da IA — revise e ajuste antes de publicar. O aluno só vê depois de “Publicar feedback”." : "Dica: marque as tags das operações antes de gerar — a IA segue o que você apontou."}
+              </span>
+              <Button onClick={publicar} disabled={salvando || gerandoIA}>{salvando ? <><Spinner size={14} /> Publicando...</> : "Publicar feedback"}</Button>
             </div>
           </Card>
         </div>

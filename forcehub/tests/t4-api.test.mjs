@@ -486,6 +486,46 @@ await ta("gerar de novo substitui (não duplica)", async () => {
   eq((await get(ctx, MENTOR, { user: "cliente.teste" })).body.envios.length, 12);
 });
 
+secao("FEEDBACK GERAL POR IA — só rascunho, quem publica é o mentor");
+async function comEnvio() {
+  const ctx = await ambiente();
+  const r = await post(ctx, ALUNO, { action: "envio", data: "2026-09-10", resumo: "Dobrei a mão.", emocional: 2,
+    operacoes: [{ id: "o1", hora: "10:00", resultado: -40, contratos: 2, setup: "Rompimento" }, { id: "o2", hora: "10:03", resultado: -60, contratos: 3, setup: "Rompimento" }] });
+  ctx.envioId = r.body.envio.id; return ctx;
+}
+await ta("aluno não pode pedir rascunho de feedback", async () => {
+  const ctx = await comEnvio();
+  eq((await post(ctx, ALUNO, { action: "feedback-ia", envioId: ctx.envioId })).status, 403);
+});
+await ta("envio inexistente: 404", async () => {
+  eq((await post(await comEnvio(), MENTOR, { action: "feedback-ia", envioId: "nao-existe" }, { user: "andre.gain" })).status, 404);
+});
+await ta("sem IA configurada: 502 claro", async () => {
+  const ctx = await comEnvio();
+  const antes = process.env.GEMINI_API_KEY; delete process.env.GEMINI_API_KEY;
+  const r = await post(ctx, MENTOR, { action: "feedback-ia", envioId: ctx.envioId }, { user: "andre.gain" });
+  if (antes) process.env.GEMINI_API_KEY = antes;
+  eq(r.status, 502); contem(r.body.error, "Não consegui gerar o feedback");
+});
+await ta("devolve o texto, leva as tags marcadas ao prompt e NÃO grava nem publica nada", async () => {
+  const ctx = await comEnvio();
+  const antesKey = process.env.GEMINI_API_KEY, antesFetch = globalThis.fetch;
+  let enviado = null;
+  process.env.GEMINI_API_KEY = "fake";
+  globalThis.fetch = async (url, opts) => { enviado = JSON.parse(opts.body);
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "André, você manteve o horário e registrou o dia com honestidade. Hoje o ponto foi a mão maior logo depois do stop das 10:00." }] } }] }), { status: 200 }); };
+  let r;
+  try {
+    r = await post(ctx, MENTOR, { action: "feedback-ia", envioId: ctx.envioId, porOperacao: { o2: { tags: ["Dobrou a mão"], comentario: "Mão maior para recuperar." } } }, { user: "andre.gain" });
+  } finally { globalThis.fetch = antesFetch; if (antesKey) process.env.GEMINI_API_KEY = antesKey; else delete process.env.GEMINI_API_KEY; }
+  eq(r.status, 200); contem(r.body.texto, "mão maior logo depois do stop");
+  const prompt = JSON.stringify(enviado);
+  contem(prompt, "Dobrou a mão"); contem(prompt, "Dobrei a mão.");
+  ehFalso(prompt.includes("SEGREDO DO MENTOR") || prompt.includes("ANOTACAO PRIVADA"), "dado privado foi para a IA");
+  const e = (await get(ctx, MENTOR, { user: "andre.gain" })).body.envios.find(x => x.id === ctx.envioId);
+  eq(e.feedback, null, "o rascunho não pode virar feedback sozinho"); eq(e.status, "aguardando");
+});
+
 console.log("");
 process.exit(resumo() ? 1 : 0);
 })();

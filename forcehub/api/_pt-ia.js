@@ -96,3 +96,61 @@ export function estadoInicial(atual) {
     publicado: a.publicado && a.publicado.texto ? a.publicado : null,
   };
 }
+
+// ─── Feedback geral do dia (IA escreve, mentor revisa e publica) ─────────────
+// Mesmo princípio do diagnóstico: a IA só devolve um TEXTO para o campo do
+// mentor; nada é gravado nem chega ao aluno até ele clicar em "Publicar".
+// Entram as tags e comentários que o mentor já marcou nas operações (ainda
+// não salvos), para a leitura do dia seguir o que ele mesmo apontou.
+export const MAX_FEEDBACK = 4000;
+export function dadosDoDiaParaIA({ ciclo, plano, envio, anteriores, porOperacao }) {
+  const c = ciclo || {}, p = plano || {}, e = envio || {}, d = e.dia || {};
+  const fbOps = porOperacao && typeof porOperacao === "object" ? porOperacao : {};
+  return {
+    primeiroNome: corta(c.nome, 80).split(" ")[0] || "aluno",
+    data: e.data,
+    plano: {
+      ativo: p.ativo, contratos: p.contratos, pontosAlvo: p.pontosAlvo, pontosStop: p.pontosStop,
+      ganhoDiarioAlvo: p.ganhoDiarioAlvo, prejuizoDiarioLimite: p.prejuizoDiarioLimite,
+      horario: p.horaInicio && p.horaFim ? `${p.horaInicio}–${p.horaFim}` : null, setups: p.setups || [],
+    },
+    relatoDoAluno: corta(e.resumo, 600) || null,
+    humor1a5: e.emocional || null,
+    dia: { resultado: d.resultado, operacoes: d.ops, gains: d.gains, losses: d.losses, bateuAlvoDoDia: !!d.atingiuAlvo,
+      bateuLimiteDePerda: !!d.atingiuLimite, maiorSequenciaDePerdas: d.maxPerdasSeguidas },
+    operacoes: (e.operacoes || []).slice(0, 40).map(o => {
+      const f = fbOps[o.id] || {};
+      return {
+        hora: o.hora, direcao: o.direcao, contratos: o.contratos, pontos: o.pontos, resultado: o.resultado, setup: o.setup || null,
+        regrasQuebradas: o.violacoes || [],
+        tagsDoMentor: Array.isArray(f.tags) ? f.tags.slice(0, 8).map(t => corta(t, 60)) : [],
+        comentarioDoMentor: corta(f.comentario, 300) || null, recomendacaoDoMentor: corta(f.recomendacao, 200) || null,
+      };
+    }),
+    regrasQuebradas: (e.violacoes || []).map(v => corta(v.texto, 200)),
+    quadro: (e.quadro || []).map(l => ({ linha: corta(l.label, 60), definido: l.definidoTxt, hoje: l.hojeTxt, status: l.status })),
+    diasAnteriores: (anteriores || []).slice(-2).map(a => ({ data: a.data, resultado: a.dia && a.dia.resultado,
+      regrasQuebradas: [...new Set((a.violacoes || []).map(v => v.tipo))], feedbackDoMentor: corta(a.feedback && a.feedback.geral, 300) || null })),
+  };
+}
+
+export const SISTEMA_FEEDBACK = `Você é a voz de um mentor de day trade (mini índice e mini dólar na B3) escrevendo o FEEDBACK GERAL DE UM DIA para um aluno do acompanhamento "Personal Trader".
+Tom: mentor amigável e experiente, humano, leve e honesto, como numa conversa. Português do Brasil, segunda pessoa ("você"), frases curtas.
+Estrutura (texto corrido, 2 ou 3 parágrafos curtos):
+1) O que sustentou o dia — comece reconhecendo algo concreto que o aluno fez bem (mesmo num dia ruim).
+2) O que precisa mudar — no máximo 2 pontos, com os números do próprio dia (horários, pontos, contratos). Use as tags e comentários do mentor como guia principal: se ele marcou algo, o texto precisa refletir isso.
+3) O foco de amanhã — 1 ação prática e simples, e uma frase de incentivo.
+Regras:
+- Processo antes de resultado: não bater o alvo do dia não é erro; quebrar regra do plano é o que importa.
+- Leve em conta o relato e o humor do aluno; se o dia foi difícil emocionalmente, acolha antes de corrigir.
+- Sem jargão sem explicação (nada de "tilt", "drawdown", "payoff", "revenge trade", "overtrading").
+- Não prometa ganhos, não recomende compra ou venda, não invente dados que não estão abaixo.
+- 80 a 170 palavras. Sem títulos, sem listas, sem markdown, no máximo 1 emoji.
+Responda apenas com o texto do feedback.`;
+
+export async function gerarFeedbackIA(dados, { gerar = geminiText } = {}) {
+  const prompt = `Dados do dia (JSON). Valores em R$, pontos e horários do pregão.\n${JSON.stringify(dados)}\n\nEscreva agora o feedback geral do dia ${dados.data || ""} para ${dados.primeiroNome}.`;
+  const texto = limparTexto(await gerar({ system: SISTEMA_FEEDBACK, messages: [{ role: "user", content: prompt }], maxTokens: 900, temperature: 0.7 })).slice(0, MAX_FEEDBACK);
+  if (texto.length < 60) throw new Error("A IA não devolveu um texto utilizável — tente de novo.");
+  return texto;
+}

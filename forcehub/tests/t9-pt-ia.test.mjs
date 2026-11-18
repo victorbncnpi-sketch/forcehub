@@ -1,5 +1,6 @@
 import { secao, t, ta, eq, ehVerdade, ehFalso, contem, resumo } from "./runner.mjs";
-import { dadosParaIA, montarPrompt, limparTexto, gerarDiagnosticoIA, SISTEMA, estadoInicial, MAX_TEXTO } from "../api/_pt-ia";
+import { dadosParaIA, montarPrompt, limparTexto, gerarDiagnosticoIA, SISTEMA, estadoInicial, MAX_TEXTO,
+  dadosDoDiaParaIA, gerarFeedbackIA, SISTEMA_FEEDBACK } from "../api/_pt-ia";
 import { readFileSync } from "node:fs";
 
 await (async () => {
@@ -55,6 +56,37 @@ t("estado inicial tolera lixo", () => {
   eq(estadoInicial({ rascunho: 5 }).rascunho, "");
 });
 
+secao("feedback geral do dia por IA");
+const ENV = { id: "e1", data: "2026-11-11", resumo: "Aumentei a mão depois do stop.", emocional: 1,
+  dia: { resultado: -172, ops: 2, gains: 0, losses: 2, atingiuLimite: true, maxPerdasSeguidas: 2 },
+  operacoes: [{ id: "o1", hora: "10:00", contratos: 2, pontos: -100, resultado: -40, setup: "Rompimento", violacoes: [] },
+    { id: "o2", hora: "10:03", contratos: 3, pontos: -180, resultado: -108, setup: "Rompimento", violacoes: ["contratos_acima", "sem_stop"] }],
+  violacoes: [{ tipo: "contratos_acima", texto: "3 contratos às 10:03 (o plano permite 2)." }],
+  quadro: [{ label: "Contratos por entrada", definidoTxt: "2", hojeTxt: "3", status: "fora" }] };
+t("leva o dia, as operações e as tags/comentários que o mentor marcou (ainda não salvos)", () => {
+  const d = dadosDoDiaParaIA({ ciclo: CICLO, plano: PLANO, envio: ENV, anteriores: ENVIOS,
+    porOperacao: { o2: { tags: ["Dobrou a mão"], comentario: "Aumentar a mão para recuperar é caro.", recomendacao: "Mesma mão após stop." } } });
+  eq(d.primeiroNome, "André"); eq(d.relatoDoAluno, "Aumentei a mão depois do stop."); eq(d.humor1a5, 1);
+  eq(d.operacoes[1].tagsDoMentor, ["Dobrou a mão"]); eq(d.operacoes[1].regrasQuebradas, ["contratos_acima", "sem_stop"]);
+  eq(d.operacoes[0].tagsDoMentor, []);
+  eq(d.regrasQuebradas, ["3 contratos às 10:03 (o plano permite 2)."]);
+  eq(d.diasAnteriores[0].feedbackDoMentor, "Pare após o 2º stop.");
+  const p = JSON.stringify(d);
+  ehFalso(p.includes("SEGREDO") || p.includes("ANOTACAO") || p.includes("15000") || p.includes("18000"), "dado privado/financeiro no prompt");
+});
+t("vazio não explode", () => { dadosDoDiaParaIA({}); });
+t("instrução: leitura do dia em 3 partes, tom amigável, segue as tags do mentor", () => {
+  contem(SISTEMA_FEEDBACK, "O que sustentou o dia"); contem(SISTEMA_FEEDBACK, "O que precisa mudar"); contem(SISTEMA_FEEDBACK, "O foco de amanhã");
+  contem(SISTEMA_FEEDBACK, "mentor amigável"); contem(SISTEMA_FEEDBACK, "tags e comentários do mentor");
+});
+await ta("gera e limpa o texto; curto demais vira erro", async () => {
+  let q = null;
+  const txt = await gerarFeedbackIA({ primeiroNome: "André", data: "2026-11-11" }, { gerar: async (x) => { q = x; return "**André**, " + "você respeitou o horário hoje. ".repeat(4); } });
+  ehVerdade(txt.startsWith("André, você respeitou")); eq(q.system, SISTEMA_FEEDBACK); contem(q.messages[0].content, "2026-11-11");
+  let erro = null; try { await gerarFeedbackIA({}, { gerar: async () => "ok" }); } catch (e) { erro = e.message; }
+  contem(erro, "tente de novo");
+});
+
 secao("telas");
 t("aluno vê o card; mentor revisa na aba Diagnóstico", () => {
   const src = readFileSync("src/personal.jsx", "utf8");
@@ -62,6 +94,7 @@ t("aluno vê o card; mentor revisa na aba Diagnóstico", () => {
   contem(src, "<PainelDiagnosticoIA user={aluno.user}");
   ehFalso(/Capital total|Aporte mensal/.test(src), "campos removidos voltaram");
   contem(src, "Prejuízo passado (R$)");
+  contem(src, 'action: "feedback-ia", envioId: envio.id, porOperacao: fb.porOperacao');
 });
 
 console.log("");

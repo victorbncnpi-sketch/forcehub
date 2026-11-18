@@ -29,7 +29,7 @@ import {
   projecao, comparaProjecao, quadroGerenciamento, planoVigenteEm,
   consolidaCiclo, alertasDoAluno, mapaDeTags, camposCalculados, avisosDoPlano, projecaoRecalibrada,
 } from "./_pt-regras";
-import { dadosParaIA, gerarDiagnosticoIA, limparTexto, estadoInicial } from "./_pt-ia";
+import { dadosParaIA, gerarDiagnosticoIA, limparTexto, estadoInicial, dadosDoDiaParaIA, gerarFeedbackIA } from "./_pt-ia";
 import { montarDemo, camposQueFaltam, ehAlunoDeTeste } from "./_pt-demo";
 
 const erro = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
@@ -368,6 +368,27 @@ export default async function handler(req, res) {
       await salvarEnvios(redis, alvo, reanalisar(ciclo, envios));
       await aprenderTags(redis, feedback);
       return res.status(200).json({ ok: true });
+    }
+
+    // ── Rascunho do feedback geral pela IA (não grava nada) ─────────────────
+    // Devolve só o texto para o campo do mentor; quem publica é ele.
+    if (action === "feedback-ia") {
+      const r = soStaff(); if (r) return r;
+      const ciclo = await lerCiclo(redis, alvo);
+      if (!ciclo) return erro(res, 404, "Este aluno ainda não tem ciclo.");
+      const envios = reanalisar(ciclo, await lerEnvios(redis, alvo));
+      const i = envios.findIndex(e => e.id === txt(body.envioId, 24));
+      if (i < 0) return erro(res, 404, "Envio não encontrado.");
+      const envio = envios[i];
+      const rascunhoOps = sanitizeFeedback({ porOperacao: body.porOperacao }).porOperacao;
+      try {
+        const texto = await gerarFeedbackIA(dadosDoDiaParaIA({
+          ciclo, plano: planoVigenteEm(ciclo.planos, envio.data), envio, anteriores: envios.slice(0, i), porOperacao: rascunhoOps,
+        }));
+        return res.status(200).json({ ok: true, texto });
+      } catch (e) {
+        return erro(res, 502, "Não consegui gerar o feedback agora: " + e.message);
+      }
     }
 
     // ── Aluno confirma a leitura e (opcionalmente) devolve 1 pergunta ───────
