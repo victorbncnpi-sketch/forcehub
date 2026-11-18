@@ -1822,6 +1822,22 @@ function FichaAluno({ aluno, jornada, onVoltar, onRecarregar, onEditarZero, onAj
     onVoltar();
   };
 
+  // Só para aluno de teste (o servidor confere de novo): troca os envios por
+  // um ciclo fictício que faz aparecer cada alerta, a fila e o relatório.
+  const deTeste = /teste/i.test(aluno.nome || "") || /teste/i.test(aluno.user || "");
+  const [gerandoDemo, setGerandoDemo] = useState(false);
+  const gerarDemo = async () => {
+    if (!(await confirmDialog({
+      title: `Gerar dados fictícios para ${aluno.nome}?`,
+      message: "Os dias enviados deste aluno de teste são substituídos por 12 pregões fictícios (com feedbacks, réplica e dias aguardando análise). Se o plano não tiver horário, setups ou limite diário, uma nova versão do plano completa esses campos.",
+      confirmLabel: "Gerar dados fictícios",
+    }))) return;
+    setGerandoDemo(true);
+    try { await api.post("/api/personal?user=" + encodeURIComponent(aluno.user), { action: "demo" }); await onRecarregar(); }
+    catch (e) { await confirmDialog({ title: "Não deu certo", message: e.message, confirmLabel: "Ok" }); }
+    setGerandoDemo(false);
+  };
+
   const abas = [{ key: "resumo", label: "Resumo" }, { key: "diagnostico", label: "Diagnóstico" }, { key: "planos", label: `Planos (${(jornada.ciclo.planos || []).length})` }, { key: "relatorio", label: "Relatório final" }];
 
   return (
@@ -1840,6 +1856,7 @@ function FichaAluno({ aluno, jornada, onVoltar, onRecarregar, onEditarZero, onAj
             ? <Button variant="gold" size="sm" onClick={() => mudarStatus("concluido")}>Encerrar ciclo</Button>
             : <Button variant="gold" size="sm" onClick={() => mudarStatus("ativo")}>Reativar</Button>}
           {jornada.ciclo.status === "ativo" && <Button variant="ghost" size="sm" onClick={() => mudarStatus("pausado")}>Pausar</Button>}
+          {deTeste && <Button variant="ghost" size="sm" onClick={gerarDemo} disabled={gerandoDemo}>{gerandoDemo ? <Spinner size={13} /> : "🧪 Gerar dados fictícios"}</Button>}
           <Button variant="danger" size="sm" onClick={removerCiclo}>Apagar ciclo</Button>
         </div>
       </Card>

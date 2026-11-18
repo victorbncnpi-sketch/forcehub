@@ -430,6 +430,62 @@ await ta("operação desconhecida é recusada", async () => {
   eq((await diag(await ambiente(), MENTOR, { op: "apagar-tudo" })).status, 400);
 });
 
+secao("DADOS FICTÍCIOS — só aluno de teste");
+async function comTeste(planoExtra = {}) {
+  const ctx = await ambiente();
+  ctx.users["cliente.teste"] = { user: "cliente.teste", name: "Cliente Teste", role: "client", perms: ["personal"] };
+  await post(ctx, MENTOR, { action: "ciclo", nome: "Cliente Teste", inicio: "2026-11-18", diasPrevistos: 30,
+    diagnostico: { capitalOperacional: 9000 }, plano: { ...PLANO, ...planoExtra } }, { user: "cliente.teste" });
+  return ctx;
+}
+await ta("aluno real NÃO pode receber dados fictícios", async () => {
+  const ctx = await ambiente();
+  const r = await post(ctx, MENTOR, { action: "demo" }, { user: "andre.gain" });
+  eq(r.status, 403); contem(r.body.error, "alunos de teste");
+});
+await ta("aluno não gera dados fictícios", async () => {
+  const ctx = await comTeste();
+  eq((await post(ctx, { user: "cliente.teste", name: "Cliente Teste", role: "client", perms: ["personal"] }, { action: "demo" })).status, 403);
+});
+await ta("Cliente Teste ganha 12 pregões, feedbacks, fila e todos os alertas novos", async () => {
+  const ctx = await comTeste();
+  const r = await post(ctx, MENTOR, { action: "demo" }, { user: "cliente.teste" });
+  eq(r.status, 200); eq(r.body.dias, 12); eq(r.body.planoCompletado, false);
+  const j = (await get(ctx, MENTOR, { user: "cliente.teste" })).body;
+  eq(j.envios.length, 12);
+  ehVerdade(j.envios.every(e => e.data < j.hoje), "nenhum dia no futuro nem hoje");
+  ehVerdade(j.envios.every(e => { const w = new Date(e.data + "T12:00:00Z").getUTCDay(); return w >= 1 && w <= 5; }), "só dias úteis");
+  const tipos = j.alertas.map(a => a.tipo);
+  for (const t of ["fora_de_horario", "perda_acima_stop", "contratos_acima", "overtrading", "mao_apos_perda", "reentrada_impulso",
+    "saiu_antes_do_alvo", "excesso_operacoes", "setup_nao_autorizado", "limite_repetido", "dias_negativos", "sequencia_limpa", "aguardando"])
+    ehVerdade(tipos.includes(t), "faltou o alerta " + t + " (veio " + tipos.join(",") + ")");
+  eq(j.envios.filter(e => e.feedback && !e.feedback.lido).length, 3, "3 feedbacks novos para o aviso");
+  ehVerdade(j.envios.some(e => e.feedback && e.feedback.replica), "uma réplica do aluno");
+  ehVerdade(j.tags.length > 3, "evolução das tags");
+  eq(j.ciclo.diagnostico.prejuizoPassado, 12000, "diagnóstico ganha prejuízo passado fictício");
+  eq(j.ciclo.diagnostico.capitalOperacional, 9000, "o que já existia é mantido");
+  eq(j.ciclo.inicio, j.envios[0].data, "o ciclo passa a começar no primeiro dia fictício");
+  const fila = (await get(ctx, MENTOR, { fn: "alunos" })).body.alunos.find(a => a.user === "cliente.teste");
+  eq(fila.pendentes.length, 3);
+  const a = (await get(ctx, { user: "cliente.teste", name: "Cliente Teste", role: "client", perms: ["personal"] })).body;
+  ehFalso("diagnostico" in a.ciclo, "diagnóstico fictício também não vai para o aluno");
+});
+await ta("plano sem horário/setups/limite: publica versão que completa e avisa", async () => {
+  const ctx = await comTeste({ horaInicio: "", horaFim: "", setups: [], prejuizoDiarioLimite: null });
+  const r = await post(ctx, MENTOR, { action: "demo" }, { user: "cliente.teste" });
+  eq(r.body.planoCompletado, true);
+  const j = (await get(ctx, MENTOR, { user: "cliente.teste" })).body;
+  eq(j.ciclo.planos.length, 2); eq(j.plano.horaInicio, "09:00"); ehVerdade(j.plano.setups.length > 0); ehVerdade(j.plano.prejuizoDiarioLimite > 0);
+  ehVerdade(j.alertas.some(a => a.tipo === "fora_de_horario"));
+});
+await ta("gerar de novo substitui (não duplica)", async () => {
+  const ctx = await comTeste();
+  await post(ctx, MENTOR, { action: "demo" }, { user: "cliente.teste" });
+  const r = await post(ctx, MENTOR, { action: "demo" }, { user: "cliente.teste" });
+  eq(r.body.substituidos, 12);
+  eq((await get(ctx, MENTOR, { user: "cliente.teste" })).body.envios.length, 12);
+});
+
 console.log("");
 process.exit(resumo() ? 1 : 0);
 })();

@@ -30,6 +30,7 @@ import {
   consolidaCiclo, alertasDoAluno, mapaDeTags, camposCalculados, avisosDoPlano, projecaoRecalibrada,
 } from "./_pt-regras";
 import { dadosParaIA, gerarDiagnosticoIA, limparTexto, estadoInicial } from "./_pt-ia";
+import { montarDemo, camposQueFaltam, ehAlunoDeTeste } from "./_pt-demo";
 
 const erro = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
 
@@ -248,6 +249,50 @@ export default async function handler(req, res) {
       }
       await salvarCiclo(redis, alvo, { ...ciclo, diagIA: est });
       return res.status(200).json({ ok: true, diagIA: est });
+    }
+
+    // ── Dados fictícios (só aluno de teste) ─────────────────────────────────
+    // Substitui os envios do aluno de teste por um ciclo de demonstração e, se
+    // o plano não tiver horário/setups/limite, publica uma versão que os
+    // completa (senão parte dos alertas não teria como aparecer).
+    if (action === "demo") {
+      const r = soStaff(); if (r) return r;
+      const ciclo = await lerCiclo(redis, alvo);
+      if (!ciclo) return erro(res, 404, "Este aluno ainda não tem ciclo.");
+      const users = await getUsers();
+      if (!ehAlunoDeTeste(ciclo.nome, alvo, users[alvo] && users[alvo].name)) {
+        return erro(res, 403, "Dados fictícios só podem ser gerados para alunos de teste (com “Teste” no nome).");
+      }
+      const hoje = hojeISO();
+      let planos = [...ciclo.planos];
+      const vigente = planoVigenteEm(planos, hoje);
+      if (!vigente) return erro(res, 409, "Defina o plano na Sessão Zero antes de gerar os dados.");
+      const falta = camposQueFaltam(vigente);
+      const primeiroDia = montarDemo(vigente, hoje)[0].data;
+      let completou = false;
+      if (Object.keys(falta).length) {
+        if (falta.prejuizoDiarioLimite === null) {
+          const risco = (Number(vigente.pontosStop) || 100) * (Number(vigente.contratos) || 1) * (Number(vigente.valorPonto) || 0.2);
+          falta.prejuizoDiarioLimite = Math.round(risco * 2 * 100) / 100;
+        }
+        planos = [...planos, sanitizePlano({ ...vigente, ...falta, vigenciaInicio: primeiroDia, motivo: "Dados fictícios: completa horário, setups e limite diário para a demonstração" }, planos.length + 1, vigente)];
+        completou = true;
+      }
+      const plano = planoVigenteEm(planos, hoje);
+      const antigos = await lerEnvios(redis, alvo);
+      await Promise.all(antigos.flatMap(e => ["relatorio", "print"].map(sf => redis.del(kImg(alvo, e.id + "-" + sf)))));
+      const d = ciclo.diagnostico || {};
+      const novoCiclo = await salvarCiclo(redis, alvo, {
+        ...ciclo, planos, status: "ativo",
+        inicio: !ciclo.inicio || ciclo.inicio > primeiroDia ? primeiroDia : ciclo.inicio, fim: null,
+        diagnostico: sanitizeDiagnostico({ ...d,
+          capitalOperacional: d.capitalOperacional || 15000, prejuizoPassado: d.prejuizoPassado || 12000,
+          experiencia: d.experiencia || "1 ano e meio (fictício)",
+          resultadoHistorico: d.resultadoHistorico || "Fictício: operava sem plano, alternando semanas boas e quedas grandes depois de aumentar a mão." }),
+      });
+      const envios = montarDemo(plano, hoje).map(e => ({ ...e, operacoes: sanitizeOperacoes(e.operacoes, plano.contratos) }));
+      await salvarEnvios(redis, alvo, reanalisar(novoCiclo, envios));
+      return res.status(200).json({ ok: true, dias: envios.length, substituidos: antigos.length, planoCompletado: completou });
     }
 
     if (action === "notas") {
